@@ -1,0 +1,11 @@
+/checkpoints/
+/.idea/
+/atten_fusion_ffn/
+/atten_fusion_ffn2/
+/ffn/
+/ffn2/
+/freqffn2/
+/freqffn2_before/
+/preds/
+/pretrained/
+/bbb.onnx
