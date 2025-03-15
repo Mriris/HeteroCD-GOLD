@@ -241,7 +241,11 @@ def normalize_image(im, time='A'):
     return im
 
 
-def read_RSimages(mode, rescale=False, root=None):
+def read_RSimages(mode, rescale=False, root=None, opt=None):
+    if root is None and opt is not None:
+        root = opt.dataroot  # 从 opt 中获取 dataroot
+    if root is None:
+        raise ValueError("root 参数未指定，请通过 opt.dataroot 或直接设置 root 提供数据路径")
     # assert mode in ['train', 'val', 'train_unchange']
     img_A_dir = os.path.join(root, mode, 'A')
     img_B_dir = os.path.join(root, mode, 'B')
@@ -396,9 +400,13 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
 #         return len(self.imgs_list_A)
 
 class Data(data.Dataset):
-    def __init__(self, mode, random_flip=False, root=None):
+    def __init__(self, mode, random_flip=False, root=None, opt=None):
+        if root is None and opt is not None:
+            root = opt.dataroot  # 从 opt 中获取 dataroot
+        if root is None:
+            raise ValueError("root 参数未指定，请通过 opt.dataroot 或直接设置 root 提供数据路径")
         self.random_flip = random_flip
-        self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root)
+        self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root=root, opt=opt)
         self.mode = mode
         self.augm = CDDataAugmentation(
             img_size=512,

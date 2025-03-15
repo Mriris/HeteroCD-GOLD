@@ -53,7 +53,8 @@ if __name__ == '__main__':
     # transform_params = get_params(opt, (512,512))
     # img_transform = get_transform(opt, transform_params, grayscale=(3 == 1))
     # B_transform = get_transform(opt, transform_params, grayscale=(3 == 1))
-    train_set_change = dataset.Data('train', root=opt.dataroot)
+    # train_set_change = dataset.Data('train', root=opt.dataroot)
+    train_set_change = dataset.Data('train', root=None, opt=opt)
     train_loader_change = DataLoader(train_set_change, batch_size=opt.batch_size, num_workers=8, shuffle=True,
                                      drop_last=True)
     dataset_size = len(train_loader_change)
