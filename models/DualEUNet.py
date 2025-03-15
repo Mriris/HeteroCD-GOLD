@@ -843,7 +843,7 @@ class DualEUNet(nn.Module):
 
 
 if __name__ == '__main__':
-    model = DualEUNet(3,3)
+    model = DualEUNet(3,2)
     x1 = torch.randn(1, 3, 256, 256)
     x2 = torch.randn(1, 3, 256, 256)
     y = model(x1,x2)

@@ -15,11 +15,11 @@ import cv2
 from skimage import io, img_as_float
 from scipy.ndimage import uniform_filter
 
-
 MEAN_A = np.array([113.40, 114.08, 116.45])
-STD_A  = np.array([48.30,  46.27,  48.14])
+STD_A = np.array([48.30, 46.27, 48.14])
 MEAN_B = np.array([111.07, 111.07, 111.07])
-STD_B  = np.array([49.41,  49.41,  49.41])
+STD_B = np.array([49.41, 49.41, 49.41])
+
 
 def get_params(opt, size):
     w, h = size
@@ -35,6 +35,7 @@ def get_params(opt, size):
     flip = random.random() > 0.5
 
     return {'crop_pos': (x, y), 'flip': flip}
+
 
 class CDDataAugmentation:
 
@@ -60,7 +61,8 @@ class CDDataAugmentation:
         self.with_random_crop = with_random_crop
         self.with_scale_random_crop = with_scale_random_crop
         self.with_random_blur = with_random_blur
-        self.random_color_tf=random_color_tf
+        self.random_color_tf = random_color_tf
+
     def transform(self, imgs, labels, to_tensor=True):
         """
         :param imgs: [ndarray,]
@@ -83,7 +85,7 @@ class CDDataAugmentation:
         if len(labels) != 0:
             if labels[0].size != (self.img_size, self.img_size):
                 labels = [F.resize(img, [self.img_size, self.img_size], interpolation=0)
-                        for img in labels]
+                          for img in labels]
 
         random_base = 0.5
         # if self.with_random_hflip and random.random() > 0.5:
@@ -106,13 +108,13 @@ class CDDataAugmentation:
                 get_params(img=imgs[0], scale=(0.8, 1.2), ratio=(1, 1))
 
             imgs = [F.resized_crop(img, i, j, h, w,
-                                    size=(self.img_size, self.img_size),
-                                    interpolation=Image.CUBIC)
+                                   size=(self.img_size, self.img_size),
+                                   interpolation=Image.CUBIC)
                     for img in imgs]
 
             labels = [F.resized_crop(img, i, j, h, w,
-                                      size=(self.img_size, self.img_size),
-                                      interpolation=Image.NEAREST)
+                                     size=(self.img_size, self.img_size),
+                                     interpolation=Image.NEAREST)
                       for img in labels]
 
         if self.with_scale_random_crop:
@@ -128,7 +130,7 @@ class CDDataAugmentation:
             imgs = [pil_crop(img, box, cropsize=self.img_size, default_value=0)
                     for img in imgs]
             labels = [pil_crop(img, box, cropsize=self.img_size, default_value=255)
-                    for img in labels]
+                      for img in labels]
 
         if self.with_random_blur and random.random() > 0:
             radius = random.random()
@@ -140,19 +142,19 @@ class CDDataAugmentation:
             imgs_tf = []
             for img in imgs:
                 tf = transforms.ColorJitter(
-                            color_jitter.brightness, 
-                            color_jitter.contrast, 
-                            color_jitter.saturation,
-                            color_jitter.hue)
+                    color_jitter.brightness,
+                    color_jitter.contrast,
+                    color_jitter.saturation,
+                    color_jitter.hue)
                 imgs_tf.append(tf(img))
             imgs = imgs_tf
-            
+
         # if to_tensor:
         #     # to tensor
         #     imgs = [TF.to_tensor(img) for img in imgs]
         # labels = [torch.from_numpy(np.array(img, np.uint8)).unsqueeze(dim=0)
         #         for img in labels]
-            
+
         #     imgs = [TF.normalize(img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         #             for img in imgs]
         # img1 = np.array(imgs[0])
@@ -165,9 +167,9 @@ def pil_crop(image, box, cropsize, default_value):
     img = np.array(image)
 
     if len(img.shape) == 3:
-        cont = np.ones((cropsize, cropsize, img.shape[2]), img.dtype)*default_value
+        cont = np.ones((cropsize, cropsize, img.shape[2]), img.dtype) * default_value
     else:
-        cont = np.ones((cropsize, cropsize), img.dtype)*default_value
+        cont = np.ones((cropsize, cropsize), img.dtype) * default_value
     cont[box[0]:box[1], box[2]:box[3]] = img[box[4]:box[5], box[6]:box[7]]
 
     return Image.fromarray(cont)
@@ -195,13 +197,13 @@ def get_random_crop_box(imgsize, cropsize):
         cont_top = random.randrange(-h_space + 1)
         img_top = 0
 
-    return cont_top, cont_top+ch, cont_left, cont_left+cw, img_top, img_top+ch, img_left, img_left+cw
+    return cont_top, cont_top + ch, cont_left, cont_left + cw, img_top, img_top + ch, img_left, img_left + cw
 
 
 def pil_rescale(img, scale, order):
     assert isinstance(img, Image.Image)
     height, width = img.size
-    target_size = (int(np.round(height*scale)), int(np.round(width*scale)))
+    target_size = (int(np.round(height * scale)), int(np.round(width * scale)))
     return pil_resize(img, target_size, order)
 
 
@@ -215,29 +217,35 @@ def pil_resize(img, size, order):
         resample = Image.NEAREST
     return img.resize(size[::-1], resample)
 
+
 def showIMG(img):
     plt.imshow(img)
     plt.show()
     return 0
+
+
 def lee_filter(img, size):
     img = img_as_float(img)  # 转换图像到浮点型，范围在0到1
     mean_img = uniform_filter(img, size)  # 计算局部均值
-    mean_sqr_img = uniform_filter(img**2, size)  # 计算局部平方均值
-    var_img = mean_sqr_img - mean_img**2  # 计算局部方差
+    mean_sqr_img = uniform_filter(img ** 2, size)  # 计算局部平方均值
+    var_img = mean_sqr_img - mean_img ** 2  # 计算局部方差
     noise = np.mean(var_img)
     coeff = var_img / (var_img + noise)
     result_img = mean_img + coeff * (img - mean_img)
     return result_img
+
+
 def normalize_image(im, time='A'):
     assert time in ['A', 'B']
-    im = im/255
+    im = im / 255
     return im
 
-def read_RSimages(mode, rescale=False, root='/data/jingwei/yantingxuan/Datasets/CityCN/Split'):
-    #assert mode in ['train', 'val', 'train_unchange']
+
+def read_RSimages(mode, rescale=False, root=None):
+    # assert mode in ['train', 'val', 'train_unchange']
     img_A_dir = os.path.join(root, mode, 'A')
     img_B_dir = os.path.join(root, mode, 'B')
-    label_A_dir = os.path.join(root, mode, 'label')    
+    label_A_dir = os.path.join(root, mode, 'label')
     data_list = os.listdir(img_A_dir)
     imgs_list_A, imgs_list_B, labels_A = [], [], []
     count = 0
@@ -251,17 +259,19 @@ def read_RSimages(mode, rescale=False, root='/data/jingwei/yantingxuan/Datasets/
         imgs_list_B.append(img_B_path)
         label_A = io.imread(label_A_path)
         labels_A.append(label_A)
-        count+=1
-        if not count%500: print('%d/%d images loaded.'%(count, len(data_list)))
-    
+        count += 1
+        if not count % 500: print('%d/%d images loaded.' % (count, len(data_list)))
+
     print(str(len(imgs_list_A)) + ' ' + mode + ' images' + ' loaded.')
-    
+
     return imgs_list_A, imgs_list_B, labels_A
+
+
 def __transforms2pil_resize(method):
     mapper = {transforms.InterpolationMode.BILINEAR: Image.BILINEAR,
               transforms.InterpolationMode.BICUBIC: Image.BICUBIC,
               transforms.InterpolationMode.NEAREST: Image.NEAREST,
-              transforms.InterpolationMode.LANCZOS: Image.LANCZOS,}
+              transforms.InterpolationMode.LANCZOS: Image.LANCZOS, }
     return mapper[method]
 
 
@@ -276,6 +286,7 @@ def __make_power_2(img, base, method=transforms.InterpolationMode.BICUBIC):
     __print_size_warning(ow, oh, w, h)
     return img.resize((w, h), method)
 
+
 def __print_size_warning(ow, oh, w, h):
     """Print warning information about image size(only print once)"""
     if not hasattr(__print_size_warning, 'has_printed'):
@@ -284,6 +295,8 @@ def __print_size_warning(ow, oh, w, h):
               "(%d, %d). This adjustment will be done to all images "
               "whose sizes are not multiples of 4" % (ow, oh, w, h))
         __print_size_warning.has_printed = True
+
+
 def __scale_width(img, target_size, crop_size, method=transforms.InterpolationMode.BICUBIC):
     method = __transforms2pil_resize(method)
     ow, oh = img.size
@@ -307,6 +320,8 @@ def __flip(img, flip):
     if flip:
         return img.transpose(Image.FLIP_LEFT_RIGHT)
     return img
+
+
 def get_transform(opt, params=None, grayscale=False, method=transforms.InterpolationMode.NEAREST, convert=True):
     transform_list = []
     if grayscale:
@@ -317,15 +332,12 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
 
     transform_list.append(transforms.Lambda(lambda img: __scale_width(img, opt.load_size, opt.crop_size, method)))
 
-
     if params is None:
         transform_list.append(transforms.RandomCrop(opt.crop_size))
     else:
         transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.crop_size)))
 
-    
     transform_list.append(transforms.RandomHorizontalFlip())
-
 
     if convert:
         transform_list += [transforms.ToTensor()]
@@ -334,6 +346,8 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
         else:
             transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
     return transforms.Compose(transform_list)
+
+
 # class Data(data.Dataset):
 #     def __init__(self, mode, img_transform, root = '/data/jingwei/HeteCD/data/xiongan_data'):
 #         self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root=root)
@@ -365,13 +379,13 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
 #         # IMG_transform = transforms.Compose(transform_list)
 #         # img_A = IMG_transform(img_A)
 #         # img_B = IMG_transform(img_B)
-        
+
 #         # if self.mode!="train":
 #         transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
 #         self.img_transform = transforms.Compose(transform_list)
 #         img_A = self.img_transform(img_A)
 #         img_B = self.img_transform(img_B)
-        
+
 #         # label = self.img_transform(label)
 #         # img_A = F.to_tensor(img_A)*2.0-1.0
 #         # img_B = F.to_tensor(img_B)*2.0-1.0
@@ -382,35 +396,36 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
 #         return len(self.imgs_list_A)
 
 class Data(data.Dataset):
-    def __init__(self, mode, random_flip = False, root = '/data/jingwei/yantingxuan/Datasets/CityCN/Split'):
+    def __init__(self, mode, random_flip=False, root=None):
         self.random_flip = random_flip
-        self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode,root)
+        self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root)
         self.mode = mode
         self.augm = CDDataAugmentation(
-                    img_size=512,
-                    with_random_hflip=True,
-                    with_random_vflip=True,
-                    with_scale_random_crop=True,
-                    with_random_blur=True,
-                    random_color_tf=False
-                )
+            img_size=512,
+            with_random_hflip=True,
+            with_random_vflip=True,
+            with_scale_random_crop=True,
+            with_random_blur=True,
+            random_color_tf=False
+        )
+
     def get_mask_name(self, idx):
         mask_name = os.path.split(self.imgs_list_A[idx])[-1]
         return mask_name
 
     def __getitem__(self, idx):
         img_A = io.imread(self.imgs_list_A[idx])
-        name = self.imgs_list_A[idx].split('/')[-1].replace('.tif','.png')
+        name = self.imgs_list_A[idx].split('/')[-1].replace('.tif', '.png')
         img_B = io.imread(self.imgs_list_B[idx])
-        transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        transform_list = [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         self.img_transform = transforms.Compose(transform_list)
-        label= self.labels[idx]//255
-        if self.mode=="train":
+        label = self.labels[idx] // 255
+        if self.mode == "train":
             [img_A, img_B], [label] = self.augm.transform([img_A, img_B], [label])
         img_A = self.img_transform(img_A)
         img_B = self.img_transform(img_B)
-            # img_A = F.to_tensor(img_A)
-            # img_B = F.to_tensor(img_B)
+        # img_A = F.to_tensor(img_A)
+        # img_B = F.to_tensor(img_B)
         label = torch.from_numpy(np.array(label, np.uint8)).unsqueeze(dim=0)
         # print(label.shape)
         # img_B = img_B/255
@@ -449,4 +464,3 @@ class Data(data.Dataset):
 
 #     def __len__(self):
 #         return self.len
-

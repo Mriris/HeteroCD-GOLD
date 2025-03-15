@@ -48,7 +48,7 @@ class Pix2PixModel(BaseModel):
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         self.model_names = ['CD']
         # define networks (both generator and discriminator)
-        self.netCD = DualEUNet(3,3)
+        self.netCD = DualEUNet(3,2)
         # for i in range(1000):
         #     # 创建输入网络的tensor
         #     # from fvcore.nn import FlopCountAnalysis, parameter_count_table
