@@ -12,7 +12,7 @@ class TrainOptions():
         # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='resnet_base',
+        parser.add_argument('--name', type=str, default='hetegan_base',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='0,1,2,3',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -24,9 +24,11 @@ class TrainOptions():
         # 附加参数
         parser.add_argument('--epoch', type=str, default='latest',
                             help='加载哪个epoch？设置为latest使用最新的缓存模型')
+        parser.add_argument('--verbose', action='store_true', help='如果指定，打印网络架构')
+        parser.add_argument('--continue_train', action='store_true', help='继续训练：从--epoch加载网络')
+        parser.add_argument('--load_iter', type=int, default=0, help='迭代从哪个加载？如果设为0，则从最近的epoch加载')
 
         # visdom和HTML可视化参数
-
         parser.add_argument('--print_freq', type=int, default=100,
                             help='在控制台上显示训练结果的频率')
         # 网络保存和加载参数

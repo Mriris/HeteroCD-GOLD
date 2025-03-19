@@ -13,16 +13,16 @@ else:
 
 
 def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
-    """Save images to the disk.
+    """将图像保存到磁盘。
 
-    Parameters:
-        webpage (the HTML class) -- the HTML webpage class that stores these imaegs (see html.py for more details)
-        visuals (OrderedDict)    -- an ordered dictionary that stores (name, images (either tensor or numpy) ) pairs
-        image_path (str)         -- the string is used to create image paths
-        aspect_ratio (float)     -- the aspect ratio of saved images
-        width (int)              -- the images will be resized to width x width
+    参数:
+        webpage (HTML类) -- 存储这些图像的HTML网页类（更多详细信息请参见html.py）
+        visuals (OrderedDict) -- 一个有序字典，存储(名称, 图像(张量或numpy))对
+        image_path (str) -- 字符串用于创建图像路径
+        aspect_ratio (float) -- 保存的图像的宽高比
+        width (int) -- 图像将被调整为宽度 x 宽度
 
-    This function will save images stored in 'visuals' to the HTML file specified by 'webpage'.
+    此函数将把存储在'visuals'中的图像保存到由'webpage'指定的HTML文件中。
     """
     image_dir = webpage.get_image_dir()
     short_path = ntpath.basename(image_path[0])
@@ -43,75 +43,75 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
 
 
 class Visualizer():
-    """This class includes several functions that can display/save images and print/save logging information.
+    """此类包含几个可以显示/保存图像和打印/保存日志信息的函数。
 
-    It uses a Python library 'visdom' for display, and a Python library 'dominate' (wrapped in 'HTML') for creating HTML files with images.
+    它使用Python库'visdom'进行显示，并使用Python库'dominate'（封装在'HTML'中）创建带有图像的HTML文件。
     """
 
     def __init__(self, opt):
-        """Initialize the Visualizer class
+        """初始化Visualizer类
 
-        Parameters:
-            opt -- stores all the experiment flags; needs to be a subclass of BaseOptions
-        Step 1: Cache the training/test options
-        Step 2: connect to a visdom server
-        Step 3: create an HTML object for saveing HTML filters
-        Step 4: create a logging file to store training losses
+        参数:
+            opt -- 存储所有实验标志；需要是BaseOptions的子类
+        步骤1：缓存训练/测试选项
+        步骤2：连接到visdom服务器
+        步骤3：创建一个HTML对象用于保存HTML过滤器
+        步骤4：创建一个日志文件来存储训练损失
         """
-        self.opt = opt  # cache the option
+        self.opt = opt  # 缓存选项
         self.display_id = 1
         self.use_html = opt.isTrain
         self.win_size = 512
         self.name = opt.name
         self.port = 8097
         self.saved = False
-        if self.display_id > 0:  # connect to a visdom server given <display_port> and <display_server>
+        if self.display_id > 0:  # 根据<display_port>和<display_server>连接到visdom服务器
             import visdom
             self.ncols = 4
             self.vis = visdom.Visdom(server="http://localhost", port=8097, env="main")
             if not self.vis.check_connection():
                 self.create_visdom_connections()
 
-        if self.use_html:  # create an HTML object at <checkpoints_dir>/web/; images will be saved under <checkpoints_dir>/web/images/
+        if self.use_html:  # 在<checkpoints_dir>/web/创建HTML对象；图像将保存在<checkpoints_dir>/web/images/下
             self.web_dir = os.path.join(opt.checkpoints_dir, opt.name, 'web')
             self.img_dir = os.path.join(self.web_dir, 'images')
-            print('create web directory %s...' % self.web_dir)
+            print('创建网页目录 %s...' % self.web_dir)
             util.mkdirs([self.web_dir, self.img_dir])
-        # create a logging file to store training losses
+        # 创建一个日志文件来存储训练损失
         self.log_name = os.path.join(opt.checkpoints_dir, opt.name, 'loss_log.txt')
         with open(self.log_name, "a") as log_file:
             now = time.strftime("%c")
-            log_file.write('================ Training Loss (%s) ================\n' % now)
+            log_file.write('================ 训练损失 (%s) ================\n' % now)
 
     def reset(self):
-        """Reset the self.saved status"""
+        """重置self.saved状态"""
         self.saved = False
 
     def create_visdom_connections(self):
-        """If the program could not connect to Visdom server, this function will start a new server at port < self.port > """
+        """如果程序无法连接到Visdom服务器，此函数将在端口<self.port>上启动一个新服务器"""
         cmd = sys.executable + ' -m visdom.server -p %d &>/dev/null &' % self.port
-        print('\n\nCould not connect to Visdom server. \n Trying to start a server....')
-        print('Command: %s' % cmd)
+        print('\n\n无法连接到Visdom服务器。\n尝试启动新服务器...')
+        print('命令: %s' % cmd)
         Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
 
     def display_current_results(self, visuals, epoch, save_result):
-        """Display current results on visdom; save current results to an HTML file.
+        """在visdom上显示当前结果；将当前结果保存到HTML文件。
 
-        Parameters:
-            visuals (OrderedDict) - - dictionary of images to display or save
-            epoch (int) - - the current epoch
-            save_result (bool) - - if save the current results to an HTML file
+        参数:
+            visuals (OrderedDict) -- 要显示或保存的图像的字典
+            epoch (int) -- 当前轮次
+            save_result (bool) -- 是否将当前结果保存到HTML文件
         """
-        if self.display_id > 0:  # show images in the browser using visdom
+        if self.display_id > 0:  # 使用visdom在浏览器中显示图像
             ncols = self.ncols
-            if ncols > 0:  # show all the images in one visdom panel
+            if ncols > 0:  # 在一个visdom面板中显示所有图像
                 ncols = min(ncols, len(visuals))
                 h, w = next(iter(visuals.values())).shape[:2]
                 table_css = """<style>
                         table {border-collapse: separate; border-spacing: 4px; white-space: nowrap; text-align: center}
                         table td {width: % dpx; height: % dpx; padding: 4px; outline: 4px solid black}
-                        </style>""" % (w, h)  # create a table css
-                # create a table of images.
+                        </style>""" % (w, h)  # 创建一个表格css
+                # 创建一个图像表格
                 title = self.name
                 label_html = ''
                 label_html_row = ''
@@ -134,14 +134,14 @@ class Visualizer():
                     label_html += '<tr>%s</tr>' % label_html_row
                 try:
                     self.vis.images(images, nrow=ncols, win=self.display_id + 1,
-                                    padding=2, opts=dict(title=title + ' images'))
+                                    padding=2, opts=dict(title=title + ' 图像'))
                     label_html = '<table>%s</table>' % label_html
                     self.vis.text(table_css + label_html, win=self.display_id + 2,
-                                  opts=dict(title=title + ' labels'))
+                                  opts=dict(title=title + ' 标签'))
                 except VisdomExceptionBase:
                     self.create_visdom_connections()
 
-            else:  # show each image in a separate visdom panel;
+            else:  # 在单独的visdom面板中显示每个图像；
                 idx = 1
                 try:
                     for label, image in visuals.items():
@@ -152,18 +152,18 @@ class Visualizer():
                 except VisdomExceptionBase:
                     self.create_visdom_connections()
 
-        if self.use_html and (save_result or not self.saved):  # save images to an HTML file if they haven't been saved.
+        if self.use_html and (save_result or not self.saved):  # 如果图像尚未保存，则将它们保存到HTML文件。
             self.saved = True
-            # save images to the disk
+            # 保存图像到磁盘
             for label, image in visuals.items():
                 image_numpy = util.tensor2im(image)
                 img_path = os.path.join(self.img_dir, 'epoch%.3d_%s.png' % (epoch, label))
                 util.save_image(image_numpy, img_path)
 
-            # update website
-            webpage = html.HTML(self.web_dir, 'Experiment name = %s' % self.name, refresh=1)
+            # 更新网站
+            webpage = html.HTML(self.web_dir, '实验名称 = %s' % self.name, refresh=1)
             for n in range(epoch, 0, -1):
-                webpage.add_header('epoch [%d]' % n)
+                webpage.add_header('轮次 [%d]' % n)
                 ims, txts, links = [], [], []
 
                 for label, image_numpy in visuals.items():
@@ -176,12 +176,12 @@ class Visualizer():
             webpage.save()
 
     def plot_current_losses(self, epoch, counter_ratio, losses):
-        """display the current losses on visdom display: dictionary of error labels and values
+        """在visdom显示上显示当前损失：错误标签和值的字典
 
-        Parameters:
-            epoch (int)           -- current epoch
-            counter_ratio (float) -- progress (percentage) in the current epoch, between 0 to 1
-            losses (OrderedDict)  -- training losses stored in the format of (name, float) pairs
+        参数:
+            epoch (int) -- 当前轮次
+            counter_ratio (float) -- 当前轮次的进度（百分比），介于0到1之间
+            losses (OrderedDict) -- 以(名称, 浮点数)对的形式存储的训练损失
         """
         if not hasattr(self, 'plot_data'):
             self.plot_data = {'X': [], 'Y': [], 'legend': list(losses.keys())}
@@ -192,29 +192,29 @@ class Visualizer():
                 X=np.stack([np.array(self.plot_data['X'])] * len(self.plot_data['legend']), 1),
                 Y=np.array(self.plot_data['Y']),
                 opts={
-                    'title': self.name + ' loss over time',
+                    'title': self.name + ' 随时间变化的损失',
                     'legend': self.plot_data['legend'],
-                    'xlabel': 'epoch',
-                    'ylabel': 'loss'},
+                    'xlabel': '轮次',
+                    'ylabel': '损失'},
                 win=self.display_id)
         except VisdomExceptionBase:
             self.create_visdom_connections()
 
-    # losses: same format as |losses| of plot_current_losses
+    # losses: 与plot_current_losses中的|losses|格式相同
     def print_current_losses(self, epoch, iters, losses, t_comp, t_data):
-        """print current losses on console; also save the losses to the disk
+        """在控制台上打印当前损失；同时将损失保存到磁盘
 
-        Parameters:
-            epoch (int) -- current epoch
-            iters (int) -- current training iteration during this epoch (reset to 0 at the end of every epoch)
-            losses (OrderedDict) -- training losses stored in the format of (name, float) pairs
-            t_comp (float) -- computational time per data point (normalized by batch_size)
-            t_data (float) -- data loading time per data point (normalized by batch_size)
+        参数:
+            epoch (int) -- 当前轮次
+            iters (int) -- 当前轮次中的当前训练迭代（在每个轮次结束时重置为0）
+            losses (OrderedDict) -- 以(名称, 浮点数)对的形式存储的训练损失
+            t_comp (float) -- 每个数据点的计算时间（按批量大小归一化）
+            t_data (float) -- 每个数据点的数据加载时间（按批量大小归一化）
         """
-        message = '(epoch: %d, iters: %d, time: %.3f, data: %.3f) ' % (epoch, iters, t_comp, t_data)
+        message = '(轮次: %d, 迭代: %d, 耗时: %.3f, 数据加载: %.3f) ' % (epoch, iters, t_comp, t_data)
         for k, v in losses.items():
             message += '%s: %.3f ' % (k, v)
 
-        print(message)  # print the message
+        print(message)  # 打印消息
         with open(self.log_name, "a") as log_file:
-            log_file.write('%s\n' % message)  # save the message
+            log_file.write('%s\n' % message)  # 保存消息

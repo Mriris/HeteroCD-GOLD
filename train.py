@@ -62,7 +62,6 @@ if __name__ == '__main__':
         iter_data_time = time.time()  # timer for data loading per iteration
         epoch_iter = 0  # the number of training iterations in current epoch, reset to 0 every epoch
         visualizer.reset()  # reset the visualizer: make sure it saves the results to HTML at least once every epoch
-        model.update_learning_rate()  # update learning rates in the beginning of every epoch.
         preds_all = []
         labels_all = []
         names_all = []
@@ -100,7 +99,7 @@ if __name__ == '__main__':
         # with open(os.path.join(opt.checkpoints_dir,opt.name,"cd_log.txt"), 'a') as f:
         #     f.write('Epoch: %d  score: %s\n'\
         #         %(epoch,{key: score[key] for key in score}))
-        print('Epoch: %d  score: %s' % (epoch, {key: score[key] for key in score}))
+        print('训练轮次: %d 评分: %s' % (epoch, {key: score[key] for key in score}))
 
         best_preds_dir = os.path.join(opt.checkpoints_dir, opt.name, "results")
         if not os.path.exists(best_preds_dir):
@@ -131,10 +130,13 @@ if __name__ == '__main__':
             for i in range(len(names_all)):
                 save_path = os.path.join(best_preds_dir, names_all[i])
                 cv2.imwrite(save_path, preds_all[i] * 255)
-            print('update best iou model')
+            print('更新最佳IoU模型')
         with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
             f.write('Epoch: %d  best_iou: %.2f  Val loss: %.2f  score: %s\n' % (epoch, best_iou, val_loss.average(),
                                                                                 {key: score[key] for key in score}))
-        print('Epoch: %d  best_iou: %.2f  Val loss: %.2f  score: %s\n' % (epoch, best_iou, val_loss.average(),
+        print('训练轮次: %d  最佳IoU: %.2f  验证损失: %.2f  评分: %s\n' % (epoch, best_iou, val_loss.average(),
                                                                           {key: score[key] for key in score}))
-        print('End of epoch %d / %d \t Time Taken: %d sec' % (epoch, opt.n_epochs, time.time() - epoch_start_time))
+        print('训练轮次 %d / %d 结束 \t 耗时: %d 秒' % (epoch, opt.n_epochs, time.time() - epoch_start_time))
+
+        # 在每个epoch结束时更新学习率
+        model.update_learning_rate()

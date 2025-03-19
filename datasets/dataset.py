@@ -69,7 +69,7 @@ class CDDataAugmentation:
         :param labels: [ndarray,]
         :return: [ndarray,],[ndarray,]
         """
-        # resize image and covert to tensor
+        # 调整图像大小并转换为张量
         imgs = [F.to_pil_image(img) for img in imgs]
         if self.img_size is None:
             self.img_size = None
@@ -88,20 +88,6 @@ class CDDataAugmentation:
                           for img in labels]
 
         random_base = 0.5
-        # if self.with_random_hflip and random.random() > 0.5:
-        #     imgs = [F.hflip(img) for img in imgs]
-        #     labels = [F.hflip(img) for img in labels]
-
-        # if self.with_random_vflip and random.random() > 0.5:
-        #     imgs = [F.vflip(img) for img in imgs]
-        #     labels = [F.vflip(img) for img in labels]
-
-        # if self.with_random_rot and random.random() > random_base:
-        #     angles = [90, 180, 270]
-        #     index = random.randint(0, 2)
-        #     angle = angles[index]
-        #     imgs = [F.rotate(img, angle) for img in imgs]
-        #     labels = [F.rotate(img, angle) for img in labels]
 
         if self.with_random_crop and random.random() > 0:
             i, j, h, w = transforms.RandomResizedCrop(size=self.img_size). \
@@ -118,13 +104,13 @@ class CDDataAugmentation:
                       for img in labels]
 
         if self.with_scale_random_crop:
-            # rescale
+            # 缩放
             scale_range = [1, 1.2]
             target_scale = scale_range[0] + random.random() * (scale_range[1] - scale_range[0])
 
             imgs = [pil_rescale(img, target_scale, order=3) for img in imgs]
             labels = [pil_rescale(img, target_scale, order=0) for img in labels]
-            # crop
+            # 裁剪
             imgsize = imgs[0].size  # h, w
             box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
             imgs = [pil_crop(img, box, cropsize=self.img_size, default_value=0)
@@ -149,16 +135,6 @@ class CDDataAugmentation:
                 imgs_tf.append(tf(img))
             imgs = imgs_tf
 
-        # if to_tensor:
-        #     # to tensor
-        #     imgs = [TF.to_tensor(img) for img in imgs]
-        # labels = [torch.from_numpy(np.array(img, np.uint8)).unsqueeze(dim=0)
-        #         for img in labels]
-
-        #     imgs = [TF.normalize(img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        #             for img in imgs]
-        # img1 = np.array(imgs[0])
-        # imgs = [F.to_tensor(img) for img in imgs]
         return imgs, labels
 
 
@@ -246,7 +222,12 @@ def read_RSimages(mode, rescale=False, root=None, opt=None):
         root = opt.dataroot  # 从 opt 中获取 dataroot
     if root is None:
         raise ValueError("root 参数未指定，请通过 opt.dataroot 或直接设置 root 提供数据路径")
-    # assert mode in ['train', 'val', 'train_unchange']
+
+    # 如果mode是test，则使用val文件夹
+    if mode == 'test':
+        mode = 'val'
+        print("使用验证集(val)数据作为测试集(test)数据")
+
     img_A_dir = os.path.join(root, mode, 'A')
     img_B_dir = os.path.join(root, mode, 'B')
     label_A_dir = os.path.join(root, mode, 'label')
@@ -254,8 +235,6 @@ def read_RSimages(mode, rescale=False, root=None, opt=None):
     imgs_list_A, imgs_list_B, labels_A = [], [], []
     count = 0
     for it in data_list:
-        # print(it)
-        # if (it[-4:]=='.tif'):
         img_A_path = os.path.join(img_A_dir, it)
         img_B_path = os.path.join(img_B_dir, it)
         label_A_path = os.path.join(label_A_dir, it)
@@ -264,9 +243,16 @@ def read_RSimages(mode, rescale=False, root=None, opt=None):
         label_A = io.imread(label_A_path)
         labels_A.append(label_A)
         count += 1
-        if not count % 500: print('%d/%d images loaded.' % (count, len(data_list)))
+        if not count % 500: print('已加载 %d/%d 张图像' % (count, len(data_list)))
 
-    print(str(len(imgs_list_A)) + ' ' + mode + ' images' + ' loaded.')
+    # 转换输出为中文
+    mode_name = {
+        'train': '训练',
+        'val': '验证',
+        'test': '测试'
+    }.get(mode, mode)
+
+    print('已加载 ' + str(len(imgs_list_A)) + ' 张' + mode_name + '图像')
 
     return imgs_list_A, imgs_list_B, labels_A
 
@@ -292,12 +278,12 @@ def __make_power_2(img, base, method=transforms.InterpolationMode.BICUBIC):
 
 
 def __print_size_warning(ow, oh, w, h):
-    """Print warning information about image size(only print once)"""
+    """打印图像大小警告信息（仅打印一次）"""
     if not hasattr(__print_size_warning, 'has_printed'):
-        print("The image size needs to be a multiple of 4. "
-              "The loaded image size was (%d, %d), so it was adjusted to "
-              "(%d, %d). This adjustment will be done to all images "
-              "whose sizes are not multiples of 4" % (ow, oh, w, h))
+        print("图像尺寸需要是4的倍数。"
+              "加载的图像尺寸为 (%d, %d)，已调整为"
+              "(%d, %d)。此调整将应用于"
+              "所有尺寸不是4的倍数的图像" % (ow, oh, w, h))
         __print_size_warning.has_printed = True
 
 
@@ -352,53 +338,6 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
     return transforms.Compose(transform_list)
 
 
-# class Data(data.Dataset):
-#     def __init__(self, mode, img_transform, root = '/data/jingwei/HeteCD/data/xiongan_data'):
-#         self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root=root)
-#         self.mode = mode
-#         self.img_transform = img_transform
-#         self.augm = CDDataAugmentation(
-#                     img_size=512,
-#                     with_random_hflip=True,
-#                     with_random_vflip=True,
-#                     with_scale_random_crop=True,
-#                     with_random_blur=False,
-#                     random_color_tf=True
-#                 )
-#     def get_mask_name(self, idx):
-#         mask_name = os.path.split(self.imgs_list_A[idx])[-1]
-#         return mask_name
-
-#     def __getitem__(self, idx):
-#         img_A = Image.open(self.imgs_list_A[idx]).convert('RGB')
-#         # img_A = img_A[:, :, (2, 1, 0)]
-#         name = self.imgs_list_A[idx].split('/')[-1]
-#         img_B = Image.open(self.imgs_list_B[idx]).convert('RGB')
-#         # img_B = img_B[:, :, (2, 1, 0)]
-#         label= self.labels[idx]//255
-#         # label = Image.fromarray(label)
-#         # if self.mode=="train":
-#         #     [img_A, img_B], [label] = self.augm.transform([img_A, img_B], [label])
-#         # transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-#         # IMG_transform = transforms.Compose(transform_list)
-#         # img_A = IMG_transform(img_A)
-#         # img_B = IMG_transform(img_B)
-
-#         # if self.mode!="train":
-#         transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-#         self.img_transform = transforms.Compose(transform_list)
-#         img_A = self.img_transform(img_A)
-#         img_B = self.img_transform(img_B)
-
-#         # label = self.img_transform(label)
-#         # img_A = F.to_tensor(img_A)*2.0-1.0
-#         # img_B = F.to_tensor(img_B)*2.0-1.0
-#         label = torch.from_numpy(np.array(label, np.uint8)).unsqueeze(dim=0)
-#         return img_A, img_B, label.squeeze(), name
-
-#     def __len__(self):
-#         return len(self.imgs_list_A)
-
 class Data(data.Dataset):
     def __init__(self, mode, random_flip=False, root=None, opt=None):
         if root is None and opt is not None:
@@ -432,43 +371,9 @@ class Data(data.Dataset):
             [img_A, img_B], [label] = self.augm.transform([img_A, img_B], [label])
         img_A = self.img_transform(img_A)
         img_B = self.img_transform(img_B)
-        # img_A = F.to_tensor(img_A)
-        # img_B = F.to_tensor(img_B)
         label = torch.from_numpy(np.array(label, np.uint8)).unsqueeze(dim=0)
-        # print(label.shape)
-        # img_B = img_B/255
-        # img_A = img_A/255  
 
         return img_A, img_B, label.squeeze(), name
 
     def __len__(self):
         return len(self.imgs_list_A)
-# class Data_test(data.Dataset):
-#     def __init__(self, test_dir):
-#         self.imgs_A = []
-#         self.imgs_B = []
-#         self.mask_name_list = []
-#         imgA_dir = os.path.join(test_dir, 'pre')
-#         imgB_dir = os.path.join(test_dir, 'post')
-#         data_list = os.listdir(imgA_dir)
-#         for it in data_list:
-#             if (it[-4:]=='.png'):
-#                 img_A_path = os.path.join(imgA_dir, it)
-#                 img_B_path = os.path.join(imgB_dir, it)
-#                 self.imgs_A.append(io.imread(img_A_path))
-#                 self.imgs_B.append(io.imread(img_B_path))
-#                 self.mask_name_list.append(it)
-#         self.len = len(self.imgs_A)
-
-#     def get_mask_name(self, idx):
-#         return self.mask_name_list[idx]
-
-#     def __getitem__(self, idx):
-#         img_A = self.imgs_A[idx]
-#         img_B = self.imgs_B[idx]
-#         img_A = normalize_image(img_A, 'A')
-#         img_B = normalize_image(img_B, 'B')
-#         return F.to_tensor(img_A), F.to_tensor(img_B)
-
-#     def __len__(self):
-#         return self.len

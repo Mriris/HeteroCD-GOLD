@@ -6,117 +6,144 @@ from . import networks
 
 
 class BaseModel(ABC):
-    """This class is an abstract base class (ABC) for models.
-    To create a subclass, you need to implement the following five functions:
-        -- <__init__>:                      initialize the class; first call BaseModel.__init__(self, opt).
-        -- <set_input>:                     unpack data from dataset and apply preprocessing.
-        -- <forward>:                       produce intermediate results.
-        -- <optimize_parameters>:           calculate losses, gradients, and update network weights.
-        -- <modify_commandline_options>:    (optionally) add model-specific options and set default options.
+    """这个类是所有模型的抽象基类。
+    要创建一个子类，你需要实现以下五个函数:
+        -- <__init__>:                      初始化网络，定义网络，初始化损失函数和优化器
+        -- <set_input>:                     从数据集中解析数据并应用预处理
+        -- <forward>:                       生成中间结果
+        -- <optimize_parameters>:           计算损失，梯度并更新网络权重
+        -- <modify_commandline_options>:    （可选）添加模型特定的选项并设置默认选项。
+
+    在BaseModel类中定义的实用函数:
+        -- <setup>:                         （由<__init__>调用）打印网络，创建调度器
+        -- <parallelize>:                   在多GPU上并行化网络
+        -- <data_dependent_initialize>:     （可选）在第一个数据批次上初始化网络
+        -- <forward>:                       用于测试的推断步骤
+        -- <get_image_paths>:               获取图像路径以保存输出图像
+        -- <update_learning_rate>:          更新所有网络的学习率；由<optimize_parameters>在每个迭代中调用
+        -- <get_current_visuals>:           获取待显示的图像
+        -- <get_current_losses>:            获取待显示的损失
+        -- <save_networks>:                 保存所有网络到磁盘
+        -- <load_networks>:                 从磁盘加载所有网络
+        -- <print_networks>:                打印网络的总数
+        -- <set_requires_grad>:             避免梯度计算的方便函数
     """
 
-    def __init__(self, opt, is_train):
-        """Initialize the BaseModel class.
+    def __init__(self, opt, is_train=True):
+        """初始化BaseModel类.
 
-        Parameters:
-            opt (Option class)-- stores all the experiment flags; needs to be a subclass of BaseOptions
+        参数:
+            opt (Option类)-- 存储所有实验标志；需要是BaseOptions的子类
 
-        When creating your custom class, you need to implement your own initialization.
-        In this function, you should first call <BaseModel.__init__(self, opt)>
-        Then, you need to define four lists:
-            -- self.loss_names (str list):          specify the training losses that you want to plot and save.
-            -- self.model_names (str list):         define networks used in our training.
-            -- self.visual_names (str list):        specify the images that you want to display and save.
-            -- self.optimizers (optimizer list):    define and initialize optimizers. You can define one optimizer for each network. If two networks are updated at the same time, you can use itertools.chain to group them. See cycle_gan_model.py for an example.
+        当创建你的自定义类时，你需要实现你自己的初始化。
+        在这个函数中，你应该首先调用 <BaseModel.__init__(self, opt)>
+        然后定义在测试和训练模式下需要使用的网络，损失函数，优化器。
+        此外，你也可以使用<setup>函数初始化你的模型。
         """
         self.opt = opt
         self.gpu_ids = opt.gpu_ids
         self.isTrain = opt.isTrain
-        self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device(
-            'cpu')  # get device name: CPU or GPU
-        self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)  # save all the checkpoints to save_dir
+        self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu')  # 获取设备名称: CPU 或 GPU
+        self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)  # 保存checkpoints的目录
+        
+        # 检查是否存在preprocess属性，如果不存在则设置默认值
+        if not hasattr(opt, 'preprocess'):
+            opt.preprocess = ''
+            
+        if opt.preprocess != 'scale_width':  # with [scale_width], input images might have different sizes, which hurts the performance of cudnn.benchmark.
+            torch.backends.cudnn.benchmark = True
         self.loss_names = []
         self.model_names = []
         self.visual_names = []
         self.optimizers = []
         self.image_paths = []
-        self.metric = 0  # used for learning rate policy 'plateau'
+        self.metric = 0  # 用于学习率调整策略，在训练期间跟踪的最佳验证指标
 
     @staticmethod
     def modify_commandline_options(parser, is_train):
-        """Add new model-specific options, and rewrite default values for existing options.
+        """添加新的模型特定选项，并重写现有选项的默认值。
 
-        Parameters:
-            parser          -- original option parser
-            is_train (bool) -- whether training phase or test phase. You can use this flag to add training-specific or test-specific options.
+        参数:
+            parser          -- 原始选项解析器
+            is_train (bool) -- 是否训练阶段或测试阶段。您可以使用此标志添加特定于训练或测试的选项。
 
-        Returns:
-            the modified parser.
+        返回:
+            修改后的解析器。
         """
         return parser
 
     @abstractmethod
     def set_input(self, input):
-        """Unpack input data from the dataloader and perform necessary pre-processing steps.
+        """从数据加载器解包输入数据并执行必要的预处理步骤。
 
-        Parameters:
-            input (dict): includes the data itself and its metadata information.
+        参数:
+            input (dict): 包括数据本身及其元数据信息。
         """
         pass
 
     @abstractmethod
     def forward(self):
-        """Run forward pass; called by both functions <optimize_parameters> and <test>."""
+        """运行前向传递；由<optimize_parameters>和<test>函数调用。"""
         pass
 
     @abstractmethod
     def optimize_parameters(self):
-        """Calculate losses, gradients, and update network weights; called in every training iteration"""
+        """计算损失、梯度并更新网络权重；在每次训练迭代中调用"""
         pass
 
     def setup(self, opt):
-        """Load and print networks; create schedulers
-
-        Parameters:
-            opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
+        """执行模型所有的设置，打印网络，创建调度器等。
+        这个函数必须在每次初始化时调用
         """
         if self.isTrain:
             self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
-        # if not self.isTrain or opt.continue_train:
-        #     load_suffix = 'iter_%d' % opt.load_iter if opt.load_iter > 0 else opt.epoch
-        #     self.load_networks(load_suffix)
-        self.print_networks(True)
+        if not self.isTrain or opt.continue_train:
+            load_suffix = 'iter_%d' % opt.load_iter if opt.load_iter > 0 else opt.epoch
+            self.load_networks(load_suffix)
+        self.print_networks(opt.verbose)
+
+    def parallelize(self):
+        """用torch.nn.DataParallel在多GPU上并行化模型"""
+        for name in self.model_names:
+            if isinstance(name, str):
+                net = getattr(self, 'net' + name)
+                setattr(self, 'net' + name, torch.nn.DataParallel(net, self.opt.gpu_ids))
+
+    def data_dependent_initialize(self, data):
+        """在数据上初始化模型
+
+        可选地，训练模型可能需要其他准备步骤（例如，预计算风格表示）。
+        """
+        pass
 
     def eval(self):
-        """Make models eval mode during test time"""
+        """使网络进入评估模式"""
         for name in self.model_names:
             if isinstance(name, str):
                 net = getattr(self, 'net' + name)
                 net.eval()
 
     def test(self):
-        """Forward function used in test time.
-
-        This function wraps <forward> function in no_grad() so we don't save intermediate steps for backprop
-        It also calls <compute_visuals> to produce additional visualization results
-        """
+        """测试期间使用前向传播"""
         with torch.no_grad():
             self.forward()
             self.compute_visuals()
 
     def compute_visuals(self):
-        """Calculate additional output images for visdom and HTML visualization"""
+        """计算额外的输出图像以供可视化"""
         pass
 
     def get_image_paths(self):
-        """ Return image paths that are used to load current data"""
+        """ 返回图像路径，用于保存/展示结果 """
         return self.image_paths
 
-    def update_learning_rate(self):
-        """Update learning rates for all the networks; called at the end of every epoch"""
+    def optimize_parameters(self):
+        """计算损失，梯度，并更新网络权重；在训练期间每个迭代中调用"""
+        pass
 
+    def update_learning_rate(self):
+        """更新所有网络的学习率；在训练期间每个迭代中调用"""
         old_lr = self.optimizers[0].param_groups[0]['lr']
-        print(old_lr)
         for scheduler in self.schedulers:
             if self.opt.lr_policy == 'plateau':
                 scheduler.step(self.metric)
@@ -124,10 +151,10 @@ class BaseModel(ABC):
                 scheduler.step()
 
         lr = self.optimizers[0].param_groups[0]['lr']
-        print('learning rate %.7f -> %.7f' % (old_lr, lr))
+        print('学习率 %.7f -> %.7f' % (old_lr, lr))
 
     def get_current_visuals(self):
-        """Return visualization images. train.py will display these images with visdom, and save the images to a HTML"""
+        """返回待显示的图像"""
         visual_ret = OrderedDict()
         for name in self.visual_names:
             if isinstance(name, str):
@@ -135,23 +162,18 @@ class BaseModel(ABC):
         return visual_ret
 
     def get_current_losses(self):
-        """Return traning losses / errors. train.py will print out these errors on console, and save them to a file"""
+        """返回待显示的训练损失"""
         errors_ret = OrderedDict()
-        # if mode == 'gen':
         for name in self.loss_names:
             if isinstance(name, str):
-                errors_ret[name] = float(getattr(self, 'loss_' + name))
-        # else:
-        #     name = "CD"
-        #     errors_ret[name] = float(getattr(self, 'loss_' + name))
-
+                errors_ret[name] = float(getattr(self, 'loss_' + name))  # float(...) 可以将1x1 Tensor变为float
         return errors_ret
 
     def save_networks(self, epoch, save_best=False):
-        """Save all the networks to the disk.
+        """将所有网络保存到磁盘
 
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
+        参数:
+            epoch (int) -- 当前epoch; 用于在文件名中添加 'epoch_'
         """
         for name in self.model_names:
             if isinstance(name, str):
@@ -169,24 +191,23 @@ class BaseModel(ABC):
                     torch.save(net.cpu().state_dict(), save_path)
 
     def __patch_instance_norm_state_dict(self, state_dict, module, keys, i=0):
-        """Fix InstanceNorm checkpoints incompatibility (prior to 0.4)"""
+        """修复InstanceNorm checkpoints不兼容性（在multi-GPU训练中）
+
+        这不需要在一般场景中使用，但是需要用于继续旧的训练任务。
+        """
         key = keys[i]
-        if i + 1 == len(keys):  # at the end, pointing to a parameter/buffer
-            if module.__class__.__name__.startswith('InstanceNorm') and \
-                    (key == 'running_mean' or key == 'running_var'):
-                if getattr(module, key) is None:
-                    state_dict.pop('.'.join(keys))
-            if module.__class__.__name__.startswith('InstanceNorm') and \
-                    (key == 'num_batches_tracked'):
-                state_dict.pop('.'.join(keys))
+        if i + 1 == len(keys):  # 在键的末尾
+            if module.affine:
+                state_dict[key] = module.bias.data
+                state_dict[key.replace('bias', 'weight')] = module.weight.data
         else:
             self.__patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
 
     def load_networks(self, epoch):
-        """Load all the networks from the disk.
+        """从磁盘加载所有网络
 
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
+        参数:
+            epoch (int) -- 当前epoch; 用于在文件名中添加 'epoch_'
         """
         for name in self.model_names:
             if isinstance(name, str):
@@ -195,25 +216,24 @@ class BaseModel(ABC):
                 net = getattr(self, 'net' + name)
                 if isinstance(net, torch.nn.DataParallel):
                     net = net.module
-                print('loading the model from %s' % load_path)
-                # if you are using PyTorch newer than 0.4 (e.g., built from
-                # GitHub source), you can remove str() on self.device
+                print('从%s加载网络' % load_path)
+                # 如果使用PyTorch > 1.0.0
                 state_dict = torch.load(load_path, map_location=str(self.device))
                 if hasattr(state_dict, '_metadata'):
                     del state_dict._metadata
 
-                # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
+                # 补丁InstanceNorm checkpoints 适用于多GPU训练
+                for key in list(state_dict.keys()):  # 需要转换成列表，因为我们可能会在循环中添加或删除键
                     self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
                 net.load_state_dict(state_dict)
 
     def print_networks(self, verbose):
-        """Print the total number of parameters in the network and (if verbose) network architecture
+        """打印网络的总参数数量
 
-        Parameters:
-            verbose (bool) -- if verbose: print the network architecture
+        参数:
+            verbose (bool) -- 如果verbose: 打印网络的结构
         """
-        print('---------- Networks initialized -------------')
+        print('---------- 网络初始化 -------------')
         for name in self.model_names:
             if isinstance(name, str):
                 net = getattr(self, 'net' + name)
@@ -222,14 +242,15 @@ class BaseModel(ABC):
                     num_params += param.numel()
                 if verbose:
                     print(net)
-                print('[Network %s] Total number of parameters : %.3f M' % (name, num_params / 1e6))
+                print('[网络 %s] 总参数数量 : %.3f M' % (name, num_params / 1e6))
         print('-----------------------------------------------')
 
     def set_requires_grad(self, nets, requires_grad=False):
-        """Set requies_grad=Fasle for all the networks to avoid unnecessary computations
-        Parameters:
-            nets (network list)   -- a list of networks
-            requires_grad (bool)  -- whether the networks require gradients or not
+        """在更新网络权重时设置需要或不需要梯度
+
+        参数:
+            nets (network list)   -- 网络列表
+            requires_grad (bool)  -- 是否需要梯度
         """
         if not isinstance(nets, list):
             nets = [nets]
@@ -237,3 +258,7 @@ class BaseModel(ABC):
             if net is not None:
                 for param in net.parameters():
                     param.requires_grad = requires_grad
+
+    def generate_visuals_for_evaluation(self, data, mode):
+        """在评估模式下计算额外的输出图像，用于保存而不是显示"""
+        pass
