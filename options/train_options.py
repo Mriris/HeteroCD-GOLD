@@ -3,44 +3,47 @@ import argparse
 
 
 class TrainOptions():
-    """This class includes training options.
+    """这个类包含训练选项。
 
-    It also includes shared options defined in BaseOptions.
+    它还包括在BaseOptions中定义的共享选项。
     """
 
     def initialize(self, parser):
-        # basic parameters
+        # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
-                            help='path to images (should have subfolders trainA, trainB, valA, valB, etc)')
+                            help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
         parser.add_argument('--name', type=str, default='resnet_base',
-                            help='name of the experiment. It decides where to store samples and models')
-        parser.add_argument('--gpu_ids', type=str, default='0,1', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
-        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints4', help='models are saved here')
+                            help='实验名称。决定了在哪里存储样本和模型')
+        parser.add_argument('--gpu_ids', type=str, default='0,1,2,3',
+                            help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
+        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints4', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
-                            help='network initialization [normal | xavier | kaiming | orthogonal]')
+                            help='网络初始化方式 [normal | xavier | kaiming | orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02,
-                            help='scaling factor for normal, xavier and orthogonal.')
-        # additional parameters
+                            help='normal、xavier和orthogonal的缩放因子。')
+        # 附加参数
         parser.add_argument('--epoch', type=str, default='latest',
-                            help='which epoch to load? set to latest to use latest cached model')
+                            help='加载哪个epoch？设置为latest使用最新的缓存模型')
 
-        # visdom and HTML visualization parameters
+        # visdom和HTML可视化参数
 
         parser.add_argument('--print_freq', type=int, default=100,
-                            help='frequency of showing training results on console')
-        # network saving and loading parameters
-        parser.add_argument('--phase', type=str, default='train', help='train, val, test, etc')
-        # training parameters
-        parser.add_argument('--load_size', type=int, default=512, help='scale images to this size')
-        parser.add_argument('--crop_size', type=int, default=512, help='then crop to this size')
-        parser.add_argument('--n_epochs', type=int, default=4, help='number of epochs with the initial learning rate')
-        parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
-        parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate for adam')
+                            help='在控制台上显示训练结果的频率')
+        # 网络保存和加载参数
+        parser.add_argument('--phase', type=str, default='train', help='train, val, test等')
+        # 训练参数
+        parser.add_argument('--load_size', type=int, default=512, help='将图像缩放到此大小')
+        parser.add_argument('--crop_size', type=int, default=512, help='然后裁剪到此大小')
+        parser.add_argument('--n_epochs', type=int, default=4, help='使用初始学习率的epoch数量')
+        parser.add_argument('--beta1', type=float, default=0.5, help='adam的动量项')
+        parser.add_argument('--lr', type=float, default=0.0005, help='adam的初始学习率')
         parser.add_argument('--lr_policy', type=str, default='cosine',
-                            help='learning rate policy. [linear | step | plateau | cosine]')
+                            help='学习率策略。[linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50,
-                            help='multiply by a gamma every lr_decay_iters iterations')
-        parser.add_argument('--batch_size', type=int, default=8, help='input batch size')
+                            help='每lr_decay_iters次迭代乘以一个gamma')
+        parser.add_argument('--batch_size', type=int, default=8, help='输入批量大小')
+        parser.add_argument('--num_workers', type=int, default=8, help='数据加载器的工作线程数')
+        parser.add_argument('--seed', type=int, default=666, help='随机种子')
         self.isTrain = True
         return parser
 
@@ -48,9 +51,9 @@ class TrainOptions():
         parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
         parser = self.initialize(parser)
         opt = parser.parse_args()
-        opt.isTrain = self.isTrain  # train or test
+        opt.isTrain = self.isTrain  # 训练或测试
 
-        # set gpu ids
+        # 设置gpu ids
         str_ids = opt.gpu_ids.split(',')
         opt.gpu_ids = []
         for str_id in str_ids:

@@ -737,7 +737,7 @@ class FrequencyEnh(nn.Module):
 class DualEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
         super(DualEUNet, self).__init__()
-        self.encoder_opt = resnet18(opt_backbone=True)
+        self.encoder_opt = resnet18()
         self.encoder_sar = resnet18()
         self.gen_decoder = Decoder(n_classes)
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)

@@ -25,12 +25,6 @@ import torch.nn.functional as FF
 ###############################################
 from datasets import dataset
 from datasets.dataset import *
-# 生成一个随机5位整数
-import math
-
-nums = math.floor(1e5 * random.random())
-seed = 666
-
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -38,28 +32,23 @@ def setup_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-
-#  torch.backends.cudnn.deterministic = True
-# # 设置随机数种子
-setup_seed(seed)
-# from models.SSCDl import SSCDl as Net
-
 ###############################################    
 # Training options
 ###############################################
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()  # get training options
-    # transform_params = get_params(opt, (512,512))
-    # img_transform = get_transform(opt, transform_params, grayscale=(3 == 1))
-    # B_transform = get_transform(opt, transform_params, grayscale=(3 == 1))
-    # train_set_change = dataset.Data('train', root=opt.dataroot)
-    train_set_change = dataset.Data('train', root=None, opt=opt)
-    train_loader_change = DataLoader(train_set_change, batch_size=opt.batch_size, num_workers=8, shuffle=True,
+    
+    # 设置随机数种子
+    setup_seed(opt.seed)
+    
+    # 使用opt中的配置加载数据集
+    train_set_change = dataset.Data('train', root=opt.dataroot, opt=opt)
+    train_loader_change = DataLoader(train_set_change, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=True,
                                      drop_last=True)
     dataset_size = len(train_loader_change)
     val_set = dataset.Data('val', root=opt.dataroot)
-    val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=8, shuffle=False, drop_last=True)
+    val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=False, drop_last=True)
     model = Pix2PixModel(opt, is_train=True)
     model.setup(opt)
     visualizer = Visualizer(opt)
