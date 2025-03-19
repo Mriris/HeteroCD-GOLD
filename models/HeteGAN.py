@@ -3,6 +3,8 @@ from .base_model import BaseModel
 from . import networks
 from .DualEUNet import DualEUNet
 from .loss import *
+
+
 class Pix2PixModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
@@ -13,6 +15,7 @@ class Pix2PixModel(BaseModel):
 
     pix2pix paper: https://arxiv.org/pdf/1611.07004.pdf
     """
+
     # @staticmethod
     # def modify_commandline_options(parser, is_train=True):
     #     """Add new dataset-specific options, and rewrite default values for existing options.
@@ -28,7 +31,6 @@ class Pix2PixModel(BaseModel):
     #     The training objective is: GAN Loss + lambda_L1 * ||G(A)-B||_1
     #     By default, we use vanilla GAN loss, UNet with batchnorm, and aligned datasets.
     #     """
-
 
     #     return parser
 
@@ -48,7 +50,7 @@ class Pix2PixModel(BaseModel):
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         self.model_names = ['CD']
         # define networks (both generator and discriminator)
-        self.netCD = DualEUNet(3,2)
+        self.netCD = DualEUNet(3, 2)
         # for i in range(1000):
         #     # 创建输入网络的tensor
         #     # from fvcore.nn import FlopCountAnalysis, parameter_count_table
@@ -64,11 +66,10 @@ class Pix2PixModel(BaseModel):
         #     # print(macs)
         #     # print(params)
 
-
         #     from thop import profile
         #     input = torch.randn(1, 3, 512, 512).float().cuda()
         #     flops, params = profile(self.netCD.cuda(), inputs=(input, input,))
-            
+
         #     from thop import clever_format
         #     flops, params = clever_format([flops, params], "%.3f")
         #     print('flops:{}'.format(flops))
@@ -79,16 +80,16 @@ class Pix2PixModel(BaseModel):
         self.is_train = is_train
         if is_train:
             self.netCD = torch.nn.DataParallel(self.netCD, opt.gpu_ids)  # multi-GPUs
-        
+
         # self.netG = networks.define_G(opt.input_nc, opt.output_nc, 64, "unet_256", "batch",
         #                               not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:
-
-            self.optimizer_G = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.netCD.parameters()), lr=opt.lr, betas=(0.9, 0.999),weight_decay=0.01 )
+            self.optimizer_G = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.netCD.parameters()), lr=opt.lr,
+                                                 betas=(0.9, 0.999), weight_decay=0.01)
             self.optimizers.append(self.optimizer_G)
 
-    def set_input(self, A, B, label, name,device):
+    def set_input(self, A, B, label, name, device):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
         Parameters:
@@ -96,7 +97,7 @@ class Pix2PixModel(BaseModel):
 
         The option 'direction' can be used to swap images in domain A and domain B.
         """
-    
+
         self.opt_img = A.to(device)
         self.sar_img = B.to(device)
         self.label = label.to(device)
@@ -113,24 +114,24 @@ class Pix2PixModel(BaseModel):
         self.netCD.load_state_dict(checkpoint)
         if not self.isTrain:
             self.netCD.eval()
-            
-        
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        [self.fake_B, self.fake_BB] = self.netCD(self.real_A,self.real_B)  # G(A)
+        [self.fake_B, self.fake_BB] = self.netCD(self.real_A, self.real_B)  # G(A)
+
     def get_val_pred(self):
         self.netCD.eval()
         self.is_train = False
         with torch.no_grad():
             self.forward_CD()
             cls_weights = torch.tensor([0.2, 0.8]).cuda()
-            loss_bn = CE_Loss(self.change_pred, self.label,cls_weights)
+            loss_bn = CE_Loss(self.change_pred, self.label, cls_weights)
         self.is_train = True
         return self.change_pred, loss_bn
-    
+
     def forward_CD(self):
-        self.change_pred = self.netCD(self.opt_img,self.sar_img)  # G(A)
+        self.change_pred = self.netCD(self.opt_img, self.sar_img)  # G(A)
+
     def backward_G(self):
         """Calculate GAN and L1 loss for the generator"""
         # fake_AB = torch.cat((self.real_A, self.fake_B), 1)
@@ -143,20 +144,21 @@ class Pix2PixModel(BaseModel):
         # # self.loss_G_L1 = (1-self.criterionCosine (self.fake_B, self.real_B) + 1-self.criterionCosine (self.fake_BB, self.real_B))/2
         # # combine loss and calculate gradients
         # self.loss_G = self.loss_G_GAN + self.loss_G_L1
-        self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2),self.opt_img.size(3)), mode='bilinear', align_corners=True)
+        self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2), self.opt_img.size(3)),
+                                         mode='bilinear', align_corners=True)
         cls_weights = torch.tensor([0.2, 0.8]).cuda()
         self.label = self.label.long()
-        self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)*100 + Dice_loss(self.change_pred, self.label)*100
+        self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights) * 100 + Dice_loss(
+            self.change_pred, self.label) * 100
 
         # combine loss and calculate gradients
         self.loss_G = self.loss_CD
         self.loss_G.backward()
 
-
-    def optimize_parameters(self,epoch):
+    def optimize_parameters(self, epoch):
         self.netCD.train()
-        self.forward_CD()  
-        self.optimizer_G.zero_grad()        # set G's gradients to zero
-        self.backward_G()                   # calculate graidents for G
+        self.forward_CD()
+        self.optimizer_G.zero_grad()  # set G's gradients to zero
+        self.backward_G()  # calculate graidents for G
         self.optimizer_G.step()
-        return self.change_pred       
+        return self.change_pred

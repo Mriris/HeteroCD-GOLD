@@ -7,7 +7,6 @@ import numpy as np
 import torch.nn.functional as F
 
 
-
 def attention_transform(feat):
     return F.normalize(feat.pow(2).mean(1).view(feat.size(0), -1))
 
@@ -16,6 +15,7 @@ def similarity_transform(feat):
     feat = feat.view(feat.size(0), -1)
     gram = feat @ feat.t()
     return F.normalize(gram)
+
 
 def SpatialWiseDivergence(feat_t, feat_s):
     assert feat_s.shape[-2:] == feat_t.shape[-2:]  # 确保空间维度相同
@@ -39,6 +39,7 @@ def SpatialWiseDivergence(feat_t, feat_s):
 
     return loss
 
+
 def ChannelWiseDivergence(feat_t, feat_s):
     assert feat_s.shape[-2:] == feat_t.shape[-2:]
     N, C, H, W = feat_s.shape
@@ -48,30 +49,36 @@ def ChannelWiseDivergence(feat_t, feat_s):
                      logsoftmax(feat_t.reshape(-1, W * H) / 4.0) -
                      softmax_pred_T *
                      logsoftmax(feat_s.reshape(-1, W * H) / 4.0)) * (
-                         (4.0)**2)
-    loss =  loss / (C * N)   
+                   (4.0) ** 2)
+    loss = loss / (C * N)
     return loss
+
+
 class AlignmentLoss(nn.Module):
-    def __init__(self, 
-                loss_weight=[1.0,1.0],
-                loss_name='loss_guidance',
-                inter_transform_type='linear'):
+    def __init__(self,
+                 loss_weight=[1.0, 1.0],
+                 loss_name='loss_guidance',
+                 inter_transform_type='linear'):
         super(AlignmentLoss, self).__init__()
-        self.inter_transform_type=inter_transform_type
+        self.inter_transform_type = inter_transform_type
         self._loss_name = loss_name
         self.loss_weight = loss_weight
+
     def forward(self, x_guidance_feature):
-        loss_inter = x_guidance_feature[0][0].new_tensor(0.0)  
+        loss_inter = x_guidance_feature[0][0].new_tensor(0.0)
         for i in range(2):
             feat_t = x_guidance_feature[0][i]
             feat_s = x_guidance_feature[1][i]
             # print(feat_t.size(),feat_s.size())
-            if feat_t.size(-2)!=feat_s.size(-2) or feat_t.size(-1)!=feat_s.size(-1):
+            if feat_t.size(-2) != feat_s.size(-2) or feat_t.size(-1) != feat_s.size(-1):
                 dsize = (max(feat_t.size(-2), feat_s.size(-2)), max(feat_t.size(-1), feat_s.size(-1)))
-                #feat_t = F.interpolate(feat_t, dsize, mode='bilinear', align_corners=False)
+                # feat_t = F.interpolate(feat_t, dsize, mode='bilinear', align_corners=False)
                 feat_s = F.interpolate(feat_s, dsize, mode='bilinear', align_corners=False)
-            loss_inter = loss_inter + self.loss_weight[i]*ChannelWiseDivergence(feat_t, feat_s) + self.loss_weight[i]*SpatialWiseDivergence(feat_t, feat_s)
+            loss_inter = loss_inter + self.loss_weight[i] * ChannelWiseDivergence(feat_t, feat_s) + self.loss_weight[
+                i] * SpatialWiseDivergence(feat_t, feat_s)
         return loss_inter
+
+
 class KLDivergenceLoss(nn.Module):
     def __init__(self, loss_weight=[1.0, 1.0], reduction='batchmean'):
         super(KLDivergenceLoss, self).__init__()
@@ -99,6 +106,7 @@ class KLDivergenceLoss(nn.Module):
             loss_kl += self.loss_weight[i] * kl_div
 
         return loss_kl
+
 
 class FeatureConsistencyLoss(nn.Module):
     def __init__(self, loss_weight=[1.0, 1.0], reduction='mean'):
@@ -131,8 +139,14 @@ class FeatureConsistencyLoss(nn.Module):
             feat_s_avg = F.adaptive_avg_pool2d(feat_s, 1)
 
             # Concatenate pooled features
-            feat_t_cat = torch.cat((feat_t_max, feat_t_avg), dim=1)*F.interpolate(label_change.float().unsqueeze(1), size=(feat_t_max.size(2),feat_t_max.size(3)), mode='nearest')
-            feat_s_cat = torch.cat((feat_s_max, feat_s_avg), dim=1)*F.interpolate(label_change.float().unsqueeze(1), size=(feat_t_max.size(2),feat_t_max.size(3)), mode='nearest')
+            feat_t_cat = torch.cat((feat_t_max, feat_t_avg), dim=1) * F.interpolate(label_change.float().unsqueeze(1),
+                                                                                    size=(feat_t_max.size(2),
+                                                                                          feat_t_max.size(3)),
+                                                                                    mode='nearest')
+            feat_s_cat = torch.cat((feat_s_max, feat_s_avg), dim=1) * F.interpolate(label_change.float().unsqueeze(1),
+                                                                                    size=(feat_t_max.size(2),
+                                                                                          feat_t_max.size(3)),
+                                                                                    mode='nearest')
 
             # Compute MSE Loss
             mse_loss = F.mse_loss(feat_t_cat, feat_s_cat, reduction=self.reduction)
@@ -141,29 +155,28 @@ class FeatureConsistencyLoss(nn.Module):
             loss_fc += self.loss_weight[i] * mse_loss
 
         return loss_fc
-    
 
-    
 
-def Dice_loss(inputs, target, beta=1, smooth = 1e-5):
+def Dice_loss(inputs, target, beta=1, smooth=1e-5):
     target = F.one_hot(target, num_classes=2)
     n, c, h, w = inputs.size()
     nt, ht, wt, ct = target.size()
     if h != ht and w != wt:
         inputs = F.interpolate(inputs, size=(ht, wt), mode="bilinear", align_corners=True)
-        
-    temp_inputs = torch.softmax(inputs.transpose(1, 2).transpose(2, 3).contiguous().view(n, -1, c),-1)
+
+    temp_inputs = torch.softmax(inputs.transpose(1, 2).transpose(2, 3).contiguous().view(n, -1, c), -1)
     temp_target = target.view(n, -1, ct)
 
-
-    tp = torch.sum(temp_target[...,:-1] * temp_inputs, axis=[0,1])
-    fp = torch.sum(temp_inputs                       , axis=[0,1]) - tp
-    fn = torch.sum(temp_target[...,:-1]              , axis=[0,1]) - tp
+    tp = torch.sum(temp_target[..., :-1] * temp_inputs, axis=[0, 1])
+    fp = torch.sum(temp_inputs, axis=[0, 1]) - tp
+    fn = torch.sum(temp_target[..., :-1], axis=[0, 1]) - tp
 
     score = ((1 + beta ** 2) * tp + smooth) / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + smooth)
     dice_loss = 1 - torch.mean(score)
     return dice_loss
-def CE_Loss(inputs, target,cls_weights):
+
+
+def CE_Loss(inputs, target, cls_weights):
     n, c, h, w = inputs.size()
     nt, ht, wt = target.size()
     if h != ht and w != wt:
@@ -172,8 +185,9 @@ def CE_Loss(inputs, target,cls_weights):
     temp_inputs = inputs.transpose(1, 2).transpose(2, 3).contiguous().view(-1, c)
     temp_target = target.view(-1)
 
-    CE_loss  = nn.CrossEntropyLoss(weight=cls_weights)(temp_inputs, temp_target)
+    CE_loss = nn.CrossEntropyLoss(weight=cls_weights)(temp_inputs, temp_target)
     return CE_loss
+
 
 class CrossEntropyLoss2d(nn.Module):
     def __init__(self, weight=None, ignore_index=-1):
@@ -195,17 +209,18 @@ def CrossEntropy2d(input, target, weight=None, size_average=False):
 
     target_mask = target >= 0
     target = target[target_mask]
-    #loss = F.nll_loss(F.log_softmax(input), target, weight=weight, size_average=False)
+    # loss = F.nll_loss(F.log_softmax(input), target, weight=weight, size_average=False)
     loss = F.cross_entropy(input, target, weight=weight, size_average=False)
     if size_average:
         loss /= target_mask.sum().data[0]
 
     return loss
-    
+
+
 def weighted_BCE(output, target, weight_pos=None, weight_neg=None):
-    output = torch.clamp(output,min=1e-8,max=1-1e-8)
-    
-    if weight_pos is not None:        
+    output = torch.clamp(output, min=1e-8, max=1 - 1e-8)
+
+    if weight_pos is not None:
         loss = weight_pos * (target * torch.log(output)) + \
                weight_neg * ((1 - target) * torch.log(1 - output))
     else:
@@ -213,20 +228,22 @@ def weighted_BCE(output, target, weight_pos=None, weight_neg=None):
 
     return torch.neg(torch.mean(loss))
 
+
 def weighted_BCE_logits(logit_pixel, truth_pixel, weight_pos=0.25, weight_neg=0.75):
     logit = logit_pixel.view(-1)
     truth = truth_pixel.view(-1)
-    assert(logit.shape==truth.shape)
+    assert (logit.shape == truth.shape)
 
     loss = F.binary_cross_entropy_with_logits(logit, truth, reduction='none')
-    
-    pos = (truth>0.5).float()
-    neg = (truth<0.5).float()
+
+    pos = (truth > 0.5).float()
+    neg = (truth < 0.5).float()
     pos_num = pos.sum().item() + 1e-12
     neg_num = neg.sum().item() + 1e-12
-    loss = (weight_pos*pos*loss/pos_num + weight_neg*neg*loss/neg_num).sum()
+    loss = (weight_pos * pos * loss / pos_num + weight_neg * neg * loss / neg_num).sum()
 
     return loss
+
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.5, gamma=2, weight=None, ignore_index=255):
@@ -243,6 +260,7 @@ class FocalLoss(nn.Module):
         loss = -((1 - pt) ** self.gamma) * self.alpha * logpt
         return loss
 
+
 class FocalLoss2d(nn.Module):
     def __init__(self, gamma=0, weight=None, size_average=True, ignore_index=-1):
         super(FocalLoss2d, self).__init__()
@@ -252,15 +270,15 @@ class FocalLoss2d(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, input, target):
-        if input.dim()>2:
+        if input.dim() > 2:
             input = input.contiguous().view(input.size(0), input.size(1), -1)
-            input = input.transpose(1,2)
+            input = input.transpose(1, 2)
             input = input.contiguous().view(-1, input.size(2)).squeeze()
-        if target.dim()==4:
+        if target.dim() == 4:
             target = target.contiguous().view(target.size(0), target.size(1), -1)
-            target = target.transpose(1,2)
+            target = target.transpose(1, 2)
             target = target.contiguous().view(-1, target.size(2)).squeeze()
-        elif target.dim()==3:
+        elif target.dim() == 3:
             target = target.view(-1)
         else:
             target = target.view(-1, 1)
@@ -271,7 +289,7 @@ class FocalLoss2d(nn.Module):
         pt = torch.exp(logpt)
 
         # compute the loss
-        loss = -((1-pt)**self.gamma) * logpt
+        loss = -((1 - pt) ** self.gamma) * logpt
 
         # averaging (or not) loss
         if self.size_average:
@@ -279,81 +297,90 @@ class FocalLoss2d(nn.Module):
         else:
             return loss.sum()
 
+
 class ChangeSimilarity(nn.Module):
     """input: x1, x2 multi-class predictions, c = class_num
        label_change: changed part
     """
+
     def __init__(self, reduction='mean'):
         super(ChangeSimilarity, self).__init__()
         self.loss_f = nn.CosineEmbeddingLoss(margin=0., reduction=reduction)
-        
+
     def forward(self, x1, x2, label_change):
-        b,c,h,w = x1.size()
-        
-        label_change = F.interpolate(label_change.float().unsqueeze(1), size=(h,w), mode='nearest').squeeze(1)
+        b, c, h, w = x1.size()
+
+        label_change = F.interpolate(label_change.float().unsqueeze(1), size=(h, w), mode='nearest').squeeze(1)
         # print(x1.shape,x2.shape,label_change.shape)
         x1 = F.softmax(x1, dim=1)
         x2 = F.softmax(x2, dim=1)
-        x1 = x1.permute(0,2,3,1)
-        x2 = x2.permute(0,2,3,1)
-        x1 = torch.reshape(x1,[b*h*w,c])
-        x2 = torch.reshape(x2,[b*h*w,c])
-        
+        x1 = x1.permute(0, 2, 3, 1)
+        x2 = x2.permute(0, 2, 3, 1)
+        x1 = torch.reshape(x1, [b * h * w, c])
+        x2 = torch.reshape(x2, [b * h * w, c])
+
         label_unchange = ~label_change.bool()
         target = label_unchange.float()
         target = target - label_change.float()
-        target = torch.reshape(target,[b*h*w])
-        
+        target = torch.reshape(target, [b * h * w])
+
         loss = self.loss_f(x1, x2, target)
         return loss
-    
+
+
 class SCA_Loss(nn.Module):
     def __init__(self):
         super(SCA_Loss, self).__init__()
         self.loss_f = nn.CosineSimilarity(dim=1, eps=1e-6)
         self.alpha = 0.2
-    def forward(self, p1, p2, gt_mask):   
-        b,c,h,w = p1.size()
+
+    def forward(self, p1, p2, gt_mask):
+        b, c, h, w = p1.size()
         p1 = F.softmax(p1, dim=1)
         p2 = F.softmax(p2, dim=1)
-      
-        un_gt_mask = 1-gt_mask
-        p1_change = (p1*gt_mask)
-        p2_change = p2*gt_mask
-        p1_unchange = p1*un_gt_mask
-        p2_unchange = p2*un_gt_mask
+
+        un_gt_mask = 1 - gt_mask
+        p1_change = (p1 * gt_mask)
+        p2_change = p2 * gt_mask
+        p1_unchange = p1 * un_gt_mask
+        p2_unchange = p2 * un_gt_mask
         # p1_change = p1_change.permute(0,2,3,1)
         # p2_change = p2_change.permute(0,2,3,1)
         # p1 = torch.reshape(p1,[b*h*w,c])
         # p2 = torch.reshape(p2,[b*h*w,c])  
         # loss = 0.8*self.loss_f(p1_unchange,(nn.Softmax(dim=1)(p2_unchange)).argmax(dim=1))-self.loss_f(p1_change,(nn.Softmax(dim=1)(p2_change)).argmax(dim=1))*0.2
-        losses = self.loss_f(p1_change.contiguous().view(b,-1),p2_change.contiguous().view(b,-1))*(1-self.alpha)-self.alpha*self.loss_f(p1_unchange.contiguous().view(b,-1),p2_unchange.contiguous().view(b,-1))
+        losses = self.loss_f(p1_change.contiguous().view(b, -1), p2_change.contiguous().view(b, -1)) * (
+                    1 - self.alpha) - self.alpha * self.loss_f(p1_unchange.contiguous().view(b, -1),
+                                                               p2_unchange.contiguous().view(b, -1))
         loss = torch.mean(losses)
         # print(losses,loss)
         return loss
+
+
 class ChangeSalience(nn.Module):
     """input: x1, x2 multi-class predictions, c = class_num
        label_change: changed part
     """
+
     def __init__(self, reduction='mean'):
         super(ChangeSimilarity, self).__init__()
         self.loss_f = nn.MSELoss(reduction=reduction)
-        
+
     def forward(self, x1, x2, label_change):
-        b,c,h,w = x1.size()
-        x1 = F.softmax(x1, dim=1)[:,0,:,:]
-        x2 = F.softmax(x2, dim=1)[:,0,:,:]
-                
+        b, c, h, w = x1.size()
+        x1 = F.softmax(x1, dim=1)[:, 0, :, :]
+        x2 = F.softmax(x2, dim=1)[:, 0, :, :]
+
         loss = self.loss_f(x1, x2.detach()) + self.loss_f(x2, x1.detach())
-        return loss*0.5
-    
+        return loss * 0.5
+
 
 def pix_loss(output, target, pix_weight, ignore_index=None):
     # Calculate log probabilities
     if ignore_index is not None:
-        active_pos = 1-(target==ignore_index).unsqueeze(1).cuda().float()
+        active_pos = 1 - (target == ignore_index).unsqueeze(1).cuda().float()
         pix_weight *= active_pos
-        
+
     batch_size, _, H, W = output.size()
     logp = F.log_softmax(output, dim=1)
     # Gather log probabilities with respect to target
@@ -365,6 +392,7 @@ def pix_loss(output, target, pix_weight, ignore_index=None):
     # Average over mini-batch
     weighted_loss = -1.0 * weighted_loss.mean()
     return weighted_loss
+
 
 def make_one_hot(input, num_classes):
     """Convert class index tensor to one hot encoding tensor.
@@ -397,6 +425,7 @@ class BinaryDiceLoss(nn.Module):
     Raise:
         Exception if unexpected reduction
     """
+
     def __init__(self, smooth=1, p=2, reduction='mean'):
         super(BinaryDiceLoss, self).__init__()
         self.smooth = smooth
@@ -423,7 +452,6 @@ class BinaryDiceLoss(nn.Module):
             raise Exception('Unexpected reduction {}'.format(self.reduction))
 
 
-
 class DiceLoss(nn.Module):
     """Dice loss, need one hot encode input
     Args:
@@ -435,6 +463,7 @@ class DiceLoss(nn.Module):
     Return:
         same as BinaryDiceLoss
     """
+
     def __init__(self, weight=None, ignore_index=None, **kwargs):
         super(DiceLoss, self).__init__()
         self.kwargs = kwargs
@@ -456,4 +485,4 @@ class DiceLoss(nn.Module):
                     dice_loss *= self.weights[i]
                 total_loss += dice_loss
 
-        return total_loss/target.shape[1]
+        return total_loss / target.shape[1]

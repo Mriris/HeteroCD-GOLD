@@ -133,6 +133,7 @@ class Convkxk(nn.Module):
     def forward(self, x):
         return self.relu(self.bn(self.conv(x)))
 
+
 class FrequencySeparation(nn.Module):
     def __init__(self):
         super(FrequencySeparation, self).__init__()
@@ -204,6 +205,7 @@ class FrequencySeparation(nn.Module):
 
             return low_freq_img, high_freq_img
 
+
 def adain(x1, x2, eps=1e-5):
     """
     将风格特征 x1 注入到内容特征 x 中.
@@ -216,7 +218,7 @@ def adain(x1, x2, eps=1e-5):
     返回:
     torch.Tensor: 融合后的特征图
     """
-    
+
     # 计算内容特征的均值和标准差 (逐通道计算)
     # print(x1.shape)
     mean_x1 = torch.mean(x1, dim=(2, 3), keepdim=True)  # (batch_size, channels, 1, 1)
@@ -225,10 +227,12 @@ def adain(x1, x2, eps=1e-5):
     mean_x2 = torch.mean(x2, dim=(2, 3), keepdim=True)  # (batch_size, channels, 1, 1)
     std_x2 = torch.std(x2, dim=(2, 3), keepdim=True) + eps  # (batch_size, channels, 1, 1)
     # 归一化内容特征 (去均值并归一化标准差)
-    normalized_x = (x1 - mean_x1) / std_x1    
+    normalized_x = (x1 - mean_x1) / std_x1
     # 调整内容特征的均值和标准差为风格特征的均值和标准差
     out = normalized_x * std_x2 + mean_x2
     return out
+
+
 class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000, opt_backbone=False):
         super(ResNet, self).__init__()
@@ -279,12 +283,10 @@ class ResNet(nn.Module):
             layers.append(block(self.inplanes, planes))
 
         return nn.Sequential(*layers)
-    
-    
-    
-    def forward(self, x,  x_sar=None):
-        #if (self.opt_backbone==False):
-        if (2>1):
+
+    def forward(self, x, x_sar=None):
+        # if (self.opt_backbone==False):
+        if (2 > 1):
             x = self.relu1(self.bn1(self.conv1(x)))
             x = self.relu2(self.bn2(self.conv2(x)))
             x = self.relu3(self.bn3(self.conv3(x)))
@@ -309,7 +311,7 @@ class ResNet(nn.Module):
             x = self.layer1(x)
             x = self.FrequencySeparation(x, return_type='low')
             # x_sar0 = self.FrequencySeparation(x_sar[0], return_type='high')
-            
+
             x = adain(x, x_sar[0])
             f.append(x)
             # f_sar.append(adain(self.FrequencySeparation(x_sar[0], return_type='low'),x_sar0))
@@ -389,6 +391,7 @@ def load_url(url, model_dir='./pretrained', map_location=None):
         sys.stderr.write('Downloading: "{}" to {}\n'.format(url, cached_file))
         urlretrieve(url, cached_file)
     return torch.load(cached_file, map_location=map_location)
+
 
 if __name__ == '__main__':
     model = resnet18(pretrained=True)

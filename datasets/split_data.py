@@ -18,6 +18,7 @@ DEFAULT_CHECK_FORMAT = False  # 是否检查图像格式
 DEFAULT_SORT_BY_CHANGE_AREA = True  # 是否根据变化区域大小进行排序选择
 DEFAULT_SELECT_PERCENTAGE = 1.0  # 选择的图像百分比
 
+
 def check_image_format(img_path, required_mode=None, required_bands=None):
     """
     检查图像格式是否符合要求，并提供详细的格式信息
@@ -87,6 +88,7 @@ def check_image_format(img_path, required_mode=None, required_bands=None):
 
     except Exception as e:
         return False, f"图像检查异常: {str(e)}", "无法获取格式详情"
+
 
 def analyze_label_images(files, sample_size=None):
     """
@@ -162,6 +164,7 @@ def analyze_label_images(files, sample_size=None):
 
     return "\n".join(report)
 
+
 def calculate_change_area(label_path):
     """
     计算标签图像中白色区域（变化区域）的像素数量
@@ -181,6 +184,7 @@ def calculate_change_area(label_path):
     except Exception as e:
         print(f"计算变化区域时出错: {e}")
         return 0
+
 
 def reorganize_processed_images(input_dir, output_dir, val_ratio=0.2, create_test_folder=True, check_format=True,
                                 sort_by_change_area=False, select_percentage=100.0):
@@ -499,6 +503,7 @@ def reorganize_processed_images(input_dir, output_dir, val_ratio=0.2, create_tes
         print(f"测试集大小: {len(val_names)}")
     print(f"输出目录: {output_dir}")
 
+
 def verify_dataset_structure(dataset_path):
     """
     验证数据集结构完整性
@@ -606,6 +611,7 @@ def verify_dataset_structure(dataset_path):
                 print(f"      label 中独有的文件: {len(label_minus_a)} 个")
 
     print("\n验证完成！")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="处理和重组图像数据集")

@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .resnet import resnet18 
+from .resnet import resnet18
 # from .resnet import FrequencySeparation
 import numpy as np
+
+
 class DoubleConv_down(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
@@ -25,6 +27,7 @@ class DoubleConv_down(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
+
 class DoubleConv_up(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
@@ -42,9 +45,11 @@ class DoubleConv_up(nn.Module):
             nn.ReLU(True),
             nn.Dropout(0.5)
         )
+
     def forward(self, x):
         return self.double_conv(x)
-    
+
+
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
@@ -52,7 +57,7 @@ class Down(nn.Module):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=4,
-                             stride=2, padding=1, bias=False)
+                      stride=2, padding=1, bias=False)
         )
 
     def forward(self, x):
@@ -68,11 +73,10 @@ class Up(nn.Module):
         # if bilinear, use the normal convolutions to reduce the number of channels
 
         self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=4, stride=2,
-                                    padding=1)
+                                     padding=1)
         self.conv = DoubleConv_up(in_channels, out_channels)
 
     def forward(self, x1, x2):
-        
         x1 = self.up(x1)
         # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
@@ -91,12 +95,9 @@ class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
         self.conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
-        
 
     def forward(self, x):
         return nn.Tanh()(self.conv(x))
-    
-
 
 
 # class Encoder(nn.Module):
@@ -172,22 +173,24 @@ class Decoder(nn.Module):
                     x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
                 processed_feats.append(x)
             return processed_feats
-        
+
         # 处理 inputs1 和 inputs2
         feats1 = process_features(inputs1)
         feats2 = process_features(inputs2)
-        
+
         # 将处理后的特征进行拼接
         x1 = torch.cat(feats1, dim=1)  # 通道数为 32*4 = 128
         x1 = self.out_conv(x1)  # 将通道数降到 32
         logits1 = self.outc(x1)
-        
+
         x2 = torch.cat(feats2, dim=1)  # 通道数为 32*4 = 128
         x2 = self.out_conv(x2)  # 将通道数降到 32
         logits2 = self.outc(x2)
-        
-        return logits1, logits2,x1,x2
-#Difference module
+
+        return logits1, logits2, x1, x2
+
+
+# Difference module
 def conv_diff(in_channels, out_channels):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -196,17 +199,21 @@ def conv_diff(in_channels, out_channels):
         nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
         nn.ReLU()
     )
+
+
 class ConvLayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
         super(ConvLayer, self).__init__()
-#         reflection_padding = kernel_size // 2
-#         self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
+        #         reflection_padding = kernel_size // 2
+        #         self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
         self.conv2d = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
 
     def forward(self, x):
-#         out = self.reflection_pad(x)
+        #         out = self.reflection_pad(x)
         out = self.conv2d(x)
         return out
+
+
 class ResidualBlock(torch.nn.Module):
     def __init__(self, channels):
         super(ResidualBlock, self).__init__()
@@ -220,7 +227,9 @@ class ResidualBlock(torch.nn.Module):
         out = self.conv2(out) * 0.1
         out = torch.add(out, residual)
         return out
-#Intermediate prediction module
+
+
+# Intermediate prediction module
 def make_prediction(in_channels, out_channels):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -228,6 +237,8 @@ def make_prediction(in_channels, out_channels):
         nn.BatchNorm2d(out_channels),
         nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
     )
+
+
 def resize(input,
            size=None,
            scale_factor=None,
@@ -248,18 +259,23 @@ def resize(input,
                         f'input size {(input_h, input_w)} is `x+1` and '
                         f'out size {(output_h, output_w)} is `nx+1`')
     return F.interpolate(input, size, scale_factor, mode, align_corners)
+
+
 class UpsampleConvLayer(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride):
-      super(UpsampleConvLayer, self).__init__()
-      self.conv2d = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=stride, padding=1)
+        super(UpsampleConvLayer, self).__init__()
+        self.conv2d = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=stride, padding=1)
 
     def forward(self, x):
         out = self.conv2d(x)
         return out
+
+
 class MLP(nn.Module):
     """
     Linear Embedding
     """
+
     def __init__(self, input_dim=2048, embed_dim=768):
         super().__init__()
         self.proj = nn.Linear(input_dim, embed_dim)
@@ -268,8 +284,10 @@ class MLP(nn.Module):
         x = x.flatten(2).transpose(1, 2)
         x = self.proj(x)
         return x
+
+
 class MultiHeadAttention(nn.Module):
-    def __init__(self, query_dim, key_dim, mid_channel,out_channel, num_heads):
+    def __init__(self, query_dim, key_dim, mid_channel, out_channel, num_heads):
         super().__init__()
         self.num_units = mid_channel
         self.num_heads = num_heads
@@ -278,11 +296,11 @@ class MultiHeadAttention(nn.Module):
         self.W_key = nn.Conv2d(key_dim, self.num_units, kernel_size=1, stride=1)
         self.W_value = nn.Conv2d(key_dim, self.num_units, kernel_size=1, stride=1)
         # self.out_conv = nn.Conv2d(self.num_units, out_channel,kernel_size=1, stride=1)
+
     def forward(self, query, key, mask=None):
+        querys = self.W_query(query)  # [N, T_q, num_units]
 
-        querys = self.W_query(query) # [N, T_q, num_units]
-
-        keys = self.W_key(key) # [N, T_k, num_units]
+        keys = self.W_key(key)  # [N, T_k, num_units]
         # print(keys.shape)
         values = self.W_value(key)
         b, c, h, w = values.shape
@@ -291,87 +309,89 @@ class MultiHeadAttention(nn.Module):
         keys = keys.view(keys.shape[0], keys.shape[1], -1)
         values = values.view(values.shape[0], values.shape[1], -1)
 
-
         split_size = self.num_units // self.num_heads
-        querys = torch.stack(torch.split(querys, split_size, dim=1), dim=0) # [h, N, T_q, num_units/h]
-        keys = torch.stack(torch.split(keys, split_size, dim=1), dim=0) # [h, N, T_k, num_units/h]
-        values = torch.stack(torch.split(values, split_size, dim=1), dim=0) # [h, N, T_k, num_units/h]
+        querys = torch.stack(torch.split(querys, split_size, dim=1), dim=0)  # [h, N, T_q, num_units/h]
+        keys = torch.stack(torch.split(keys, split_size, dim=1), dim=0)  # [h, N, T_k, num_units/h]
+        values = torch.stack(torch.split(values, split_size, dim=1), dim=0)  # [h, N, T_k, num_units/h]
         ## score = softmax(QK^T / (d_k ** 0.5))
 
-        scores = torch.matmul(querys, keys.transpose(2, 3)) # [h, N, T_q, T_k]
+        scores = torch.matmul(querys, keys.transpose(2, 3))  # [h, N, T_q, T_k]
 
         scores = scores / (self.key_dim ** 0.5)
         ## mask
         if mask is not None:
             ## mask:  [N, T_k] --> [h, N, T_q, T_k]
-            mask = mask.unsqueeze(1).unsqueeze(0).repeat(self.num_heads,1,querys.shape[2],1)
+            mask = mask.unsqueeze(1).unsqueeze(0).repeat(self.num_heads, 1, querys.shape[2], 1)
             scores = scores.masked_fill(mask, -np.inf)
         scores = F.softmax(scores, dim=3)
         out = torch.matmul(scores, values)
         # print(out.shape)
-        out = torch.cat(torch.split(out, 1, dim=0), dim=2).squeeze(0) # [N, T_q, num_units]
+        out = torch.cat(torch.split(out, 1, dim=0), dim=2).squeeze(0)  # [N, T_q, num_units]
         # out = out.permute(0, 2, 1, 3).contiguous()
-        out = out.view(b, c,h,w)
+        out = out.view(b, c, h, w)
         # print(scores.shape, out.shape)
         # out = scores*values
         return out
+
+
 class CD_Decoder(nn.Module):
     """
     Transformer Decoder
     """
-    def __init__(self, input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=True, 
-                    in_channels = [64, 128, 256, 512], embedding_dim= 64, output_nc=2, 
-                    decoder_softmax = False, feature_strides=[2, 4, 8, 16]):
+
+    def __init__(self, input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=True,
+                 in_channels=[64, 128, 256, 512], embedding_dim=64, output_nc=2,
+                 decoder_softmax=False, feature_strides=[2, 4, 8, 16]):
         super(CD_Decoder, self).__init__()
-        #assert
+        # assert
         assert len(feature_strides) == len(in_channels)
         assert min(feature_strides) == feature_strides[0]
-        
-        #settings
+
+        # settings
         self.feature_strides = feature_strides
         self.input_transform = input_transform
-        self.in_index        = in_index
-        self.align_corners   = align_corners
-        self.in_channels     = in_channels
-        self.embedding_dim   = embedding_dim
-        self.output_nc       = output_nc
+        self.in_index = in_index
+        self.align_corners = align_corners
+        self.in_channels = in_channels
+        self.embedding_dim = embedding_dim
+        self.output_nc = output_nc
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
 
-        #MLP decoder heads
+        # MLP decoder heads
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=c4_in_channels)
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=c3_in_channels)
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=c2_in_channels)
         self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=c1_in_channels)
 
-        #convolutional Difference Modules
-        self.diff_c4   = conv_diff(in_channels=2*c4_in_channels, out_channels=self.embedding_dim)
-        self.diff_c3   = conv_diff(in_channels=2*c3_in_channels, out_channels=self.embedding_dim)
-        self.diff_c2   = conv_diff(in_channels=2*c2_in_channels, out_channels=self.embedding_dim)
-        self.diff_c1   = conv_diff(in_channels=2*c1_in_channels, out_channels=self.embedding_dim)
+        # convolutional Difference Modules
+        self.diff_c4 = conv_diff(in_channels=2 * c4_in_channels, out_channels=self.embedding_dim)
+        self.diff_c3 = conv_diff(in_channels=2 * c3_in_channels, out_channels=self.embedding_dim)
+        self.diff_c2 = conv_diff(in_channels=2 * c2_in_channels, out_channels=self.embedding_dim)
+        self.diff_c1 = conv_diff(in_channels=2 * c1_in_channels, out_channels=self.embedding_dim)
 
-        #taking outputs from middle of the encoder
+        # taking outputs from middle of the encoder
         self.make_pred_c4 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c3 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c2 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c1 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
 
-        #Final linear fusion layer
+        # Final linear fusion layer
         self.linear_fuse = nn.Sequential(
-            nn.Conv2d(   in_channels=self.embedding_dim*len(in_channels), out_channels=self.embedding_dim,
-                                        kernel_size=1),
+            nn.Conv2d(in_channels=self.embedding_dim * len(in_channels), out_channels=self.embedding_dim,
+                      kernel_size=1),
             nn.BatchNorm2d(self.embedding_dim)
         )
 
-        #Final predction head
-        self.convd2x    = nn.Sequential( ResidualBlock(self.embedding_dim))
+        # Final predction head
+        self.convd2x = nn.Sequential(ResidualBlock(self.embedding_dim))
         # self.dense_2x   = nn.Sequential( ResidualBlock(self.embedding_dim))
         # self.convd1x    = nn.Sequential( ResidualBlock(self.embedding_dim))
         # self.dense_1x   = nn.Sequential( ResidualBlock(self.embedding_dim))
         self.change_probability = ConvLayer(self.embedding_dim, self.output_nc, kernel_size=3, stride=1, padding=1)
-        
-        #Final activation
-        self.output_softmax     = decoder_softmax
-        self.active             = nn.Sigmoid() 
+
+        # Final activation
+        self.output_softmax = decoder_softmax
+        self.active = nn.Sigmoid()
 
     def _transform_inputs(self, inputs):
         """Transform inputs for decoder.
@@ -399,11 +419,11 @@ class CD_Decoder(nn.Module):
         return inputs
 
     def forward(self, inputs1, inputs2):
-        #Transforming encoder features (select layers)
+        # Transforming encoder features (select layers)
         x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
         x_2 = self._transform_inputs(inputs2)  # len=4, 1/2, 1/4, 1/8, 1/16
 
-        #img1 and img2 features
+        # img1 and img2 features
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
@@ -412,37 +432,37 @@ class CD_Decoder(nn.Module):
 
         outputs = []
         # Stage 4: x1/32 scale
-        _c4_1 = self.linear_c4(c4_1).permute(0,2,1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
-        _c4_2 = self.linear_c4(c4_2).permute(0,2,1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
-        _c4   = self.diff_c4(torch.cat((_c4_1, _c4_2), dim=1))
-        p_c4  = self.make_pred_c4(_c4)
+        _c4_1 = self.linear_c4(c4_1).permute(0, 2, 1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
+        _c4_2 = self.linear_c4(c4_2).permute(0, 2, 1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
+        _c4 = self.diff_c4(torch.cat((_c4_1, _c4_2), dim=1))
+        p_c4 = self.make_pred_c4(_c4)
         outputs.append(p_c4)
-        _c4_up= resize(_c4, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
+        _c4_up = resize(_c4, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 3: x1/16 scale
-        _c3_1 = self.linear_c3(c3_1).permute(0,2,1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
-        _c3_2 = self.linear_c3(c3_2).permute(0,2,1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
-        _c3   = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
-        p_c3  = self.make_pred_c3(_c3)
+        _c3_1 = self.linear_c3(c3_1).permute(0, 2, 1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
+        _c3_2 = self.linear_c3(c3_2).permute(0, 2, 1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
+        _c3 = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
+        p_c3 = self.make_pred_c3(_c3)
         outputs.append(p_c3)
-        _c3_up= resize(_c3, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
+        _c3_up = resize(_c3, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 2: x1/8 scale
-        _c2_1 = self.linear_c2(c2_1).permute(0,2,1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
-        _c2_2 = self.linear_c2(c2_2).permute(0,2,1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
-        _c2   = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
-        p_c2  = self.make_pred_c2(_c2)
+        _c2_1 = self.linear_c2(c2_1).permute(0, 2, 1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
+        _c2_2 = self.linear_c2(c2_2).permute(0, 2, 1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
+        _c2 = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
+        p_c2 = self.make_pred_c2(_c2)
         outputs.append(p_c2)
-        _c2_up= resize(_c2, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
+        _c2_up = resize(_c2, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
         # Stage 1: x1/4 scale
-        _c1_1 = self.linear_c1(c1_1).permute(0,2,1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
-        _c1_2 = self.linear_c1(c1_2).permute(0,2,1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])
-        _c1   = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
-        p_c1  = self.make_pred_c1(_c1)
+        _c1_1 = self.linear_c1(c1_1).permute(0, 2, 1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
+        _c1_2 = self.linear_c1(c1_2).permute(0, 2, 1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])
+        _c1 = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
+        p_c1 = self.make_pred_c1(_c1)
         outputs.append(p_c1)
 
-        #Linear Fusion of difference image from all scales
+        # Linear Fusion of difference image from all scales
         _c = self.linear_fuse(torch.cat((_c4_up, _c3_up, _c2_up, _c1), dim=1))
         # #Dropout
         # if dropout_ratio > 0:
@@ -450,20 +470,20 @@ class CD_Decoder(nn.Module):
         # else:
         #     self.dropout = None
 
-        #Upsampling x2 (x1/2 scale)
+        # Upsampling x2 (x1/2 scale)
         x = self.convd2x(_c)
-        #Residual block
+        # Residual block
         # x = self.dense_2x(x)
         # #Upsampling x2 (x1 scale)
         # x = self.convd1x(x)
         # #Residual block
         # x = self.dense_1x(x)
 
-        #Final prediction
+        # Final prediction
         cp = self.change_probability(x)
-        
+
         outputs.append(cp)
-        
+
         if self.output_softmax:
             temp = outputs
             outputs = []
@@ -471,7 +491,8 @@ class CD_Decoder(nn.Module):
                 outputs.append(self.active(pred))
 
         return outputs
-    
+
+
 class MixFFN(nn.Module):
     """An implementation of MixFFN of Segformer.
     Args:
@@ -527,7 +548,7 @@ class MixFFN(nn.Module):
             stride=1,
             bias=True)
         self.drop = nn.Dropout(ffn_drop)
-        
+
         self.dropout_layer = self.build_dropout(dropout_layer) if dropout_layer else nn.Identity()
 
     def build_activation_layer(self, act_cfg):
@@ -550,10 +571,12 @@ class MixFFN(nn.Module):
         out = self.drop(out)
         out = self.fc2(out)
         out = self.drop(out)
-        
+
         if identity is None:
             identity = x
         return identity + self.dropout_layer(out)
+
+
 class eca_layer(nn.Module):
     """Constructs a ECA module.
 
@@ -561,10 +584,11 @@ class eca_layer(nn.Module):
         channel: Number of channels of the input feature map
         k_size: Adaptive selection of kernel size
     """
+
     def __init__(self, channel, k_size=3):
         super(eca_layer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -579,10 +603,13 @@ class eca_layer(nn.Module):
 
         # return x * y.expand_as(x)
         return y.expand_as(x)
+
+
 class FrequencyMixEnh(nn.Module):
-    def __init__(self,in_channels,compress_ratio=16):
+    def __init__(self, in_channels, compress_ratio=16):
         super(FrequencyMixEnh, self).__init__()
-        self.in_channels = in_channels*2
+        self.in_channels = in_channels * 2
+
     #     self.channel_att1 = self._make_channel_att_layer(compress_ratio)
     #     self.channel_att2 = self._make_channel_att_layer(compress_ratio)
     # def _make_channel_att_layer(self, compress_ratio):
@@ -597,18 +624,18 @@ class FrequencyMixEnh(nn.Module):
         # 对两组特征进行傅里叶变换
         fft_feature1 = torch.fft.fft2(feature1)
         fft_feature2 = torch.fft.fft2(feature2)
-        
+
         # 提取幅值和相位
         magnitude1 = torch.abs(fft_feature1)
         phase1 = torch.angle(fft_feature1)
-        
+
         magnitude2 = torch.abs(fft_feature2)
         phase2 = torch.angle(fft_feature2)
-        
+
         # 交换幅值和相位
         swap_fft_feature2 = magnitude1 * torch.exp(1j * phase2)
         swap_fft_feature1 = magnitude2 * torch.exp(1j * phase1)
-        
+
         # 逆傅里叶变换得到新的特征
         swap_feature2 = torch.fft.ifft2(swap_fft_feature2)
         swap_feature1 = torch.fft.ifft2(swap_fft_feature1)
@@ -620,10 +647,10 @@ class FrequencyMixEnh(nn.Module):
         # new_feature1 = self.channel_att1(new_feature1)
         # new_feature2 = self.channel_att2(new_feature2)
         return swap_feature1.real, swap_feature2.real
-    
+
 
 class FrequencyEnh(nn.Module):
-    def __init__(self, 
+    def __init__(self,
                  in_channels,
                  k_list=[2],
                  fs_feat='feat',
@@ -634,7 +661,7 @@ class FrequencyEnh(nn.Module):
                  spatial_group=1,
                  compress_ratio=16):
         super().__init__()
-        
+
         self.k_list = sorted(k_list)
         self.in_channels = in_channels
         self.fs_feat = fs_feat
@@ -642,18 +669,18 @@ class FrequencyEnh(nn.Module):
         self.channel_res = channel_res
         self.spatial_group = min(spatial_group, in_channels)
         self.freq_thres = 0.35  # Increased for more flexibility
-        
+
         # Frequency weight convolution layer
         if spatial == 'conv':
-            self.freq_weight_conv = nn.Conv2d(in_channels, (len(k_list) + 1) * self.spatial_group, 
+            self.freq_weight_conv = nn.Conv2d(in_channels, (len(k_list) + 1) * self.spatial_group,
                                               kernel_size=3, padding=1, bias=True)
         else:
             raise NotImplementedError("Only 'conv' is implemented for spatial dimension.")
-        
+
         # Channel attention layers for low and high frequencies
         self.channel_att_low = self._make_channel_att_layer(compress_ratio)
         self.channel_att_high = self._make_channel_att_layer(compress_ratio)
-        
+
         self.act_func = nn.Sigmoid() if act == 'sigmoid' else nn.Softmax(dim=1)
 
     def _make_channel_att_layer(self, compress_ratio):
@@ -664,21 +691,21 @@ class FrequencyEnh(nn.Module):
             nn.Conv2d(self.in_channels // compress_ratio, self.in_channels, kernel_size=1, bias=True),
             nn.Sigmoid()
         )
-    
+
     def forward(self, x):
         # Generate frequency weights
         freq_weight = self.act_func(self.freq_weight_conv(x))
         if isinstance(self.act_func, nn.Softmax):
             freq_weight *= freq_weight.shape[1]
-        
+
         # Fourier Transform and masks
         x_fft = torch.fft.fftshift(torch.fft.fft2(x))
         low_mask, high_mask = self._get_frequency_masks(x_fft.shape[2:], x.device)
-        
+
         # Separate into low and high frequency components
         low_part = torch.fft.ifft2(torch.fft.ifftshift(x_fft * low_mask)).real
         high_part = x - low_part
-        
+
         # Channel attention for low and high frequencies
         low_att = self._apply_channel_attention(self.channel_att_low, low_mask, x_fft)
         high_att = self._apply_channel_attention(self.channel_att_high, high_mask, x_fft)
@@ -689,23 +716,24 @@ class FrequencyEnh(nn.Module):
         res = low_part + high_part
 
         return res + x if self.channel_res else res
-    
+
     def _get_frequency_masks(self, shape, device):
         h, w = shape
         low_mask = torch.zeros((1, 1, h, w), device=device)
         high_mask = torch.ones_like(low_mask)
-        
+
         h_low, h_high = round(h / 2 - h * self.freq_thres), round(h / 2 + h * self.freq_thres)
         w_low, w_high = round(w / 2 - w * self.freq_thres), round(w / 2 + w * self.freq_thres)
-        
+
         low_mask[:, :, h_low:h_high, w_low:w_high] = 1.0
         high_mask[:, :, h_low:h_high, w_low:w_high] = 0.0
         return low_mask, high_mask
-    
+
     def _apply_channel_attention(self, channel_att_layer, mask, x_fft):
         mask_fft = x_fft * mask
         return torch.sqrt(channel_att_layer(mask_fft.real) ** 2 + channel_att_layer(mask_fft.imag) ** 2 + 1e-8)
-    
+
+
 class DualEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
         super(DualEUNet, self).__init__()
@@ -721,22 +749,22 @@ class DualEUNet(nn.Module):
         self.in_channels = [64, 128, 256, 512]
         self.channels = 128
         self.fusion_conv1 = nn.Sequential(
-                    nn.Conv2d(self.channels*len(self.in_channels), self.channels//2, kernel_size=1),
-                    nn.BatchNorm2d(self.channels//2),
-                )
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
+            nn.BatchNorm2d(self.channels // 2),
+        )
         self.fusion_conv2 = nn.Sequential(
-                    nn.Conv2d(self.channels*len(self.in_channels), self.channels//2, kernel_size=1),
-                    nn.BatchNorm2d(self.channels//2),
-                )
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
+            nn.BatchNorm2d(self.channels // 2),
+        )
         self.fusion_gen_conv1 = nn.Sequential(
-                    nn.Conv2d(self.channels, self.channels//2, kernel_size=1),
-                    nn.BatchNorm2d(self.channels//2),
-                )
+            nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
+            nn.BatchNorm2d(self.channels // 2),
+        )
         self.fusion_gen_conv2 = nn.Sequential(
-                    nn.Conv2d(self.channels, self.channels//2, kernel_size=1),
-                    nn.BatchNorm2d(self.channels//2),
-                )
-        self.conv_seg = nn.Conv2d(self.channels , 2, kernel_size=1)
+            nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
+            nn.BatchNorm2d(self.channels // 2),
+        )
+        self.conv_seg = nn.Conv2d(self.channels, 2, kernel_size=1)
         for i in range(len(self.in_channels)):
             self.convs1.append(
                 nn.Sequential(
@@ -755,10 +783,10 @@ class DualEUNet(nn.Module):
             )
         # self.cross_atten1 = MultiHeadAttention(self.channels//2,self.channels//2,self.channels//2,self.channels//2,8)
         # self.cross_atten2 = MultiHeadAttention(self.channels//2,self.channels//2,self.channels//2,self.channels//2,8)
-        self.atten = self._make_channel_att_layer(compress_ratio = 16)
+        self.atten = self._make_channel_att_layer(compress_ratio=16)
         self.freqmixenh = FrequencyMixEnh(in_channels=self.channels)
-        self.fusion_layer = nn.Sequential(nn.Conv2d(self.channels*2, self.channels, kernel_size=1),
-                                            nn.GELU())  
+        self.fusion_layer = nn.Sequential(nn.Conv2d(self.channels * 2, self.channels, kernel_size=1),
+                                          nn.GELU())
         self.atten_fusion_ffn = MixFFN(
             embed_dims=self.channels,
             feedforward_channels=self.channels,
@@ -770,15 +798,17 @@ class DualEUNet(nn.Module):
             feedforward_channels=self.channels,
             ffn_drop=0.,
             dropout_layer=dict(type='DropPath', drop_prob=0.),
-            act_cfg=dict(type='GELU'))             
+            act_cfg=dict(type='GELU'))
+
     def _make_channel_att_layer(self, compress_ratio):
-            return nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Conv2d(self.channels*2, self.channels*2 // compress_ratio, kernel_size=1, bias=True),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(self.channels*2 // compress_ratio, self.channels*2, kernel_size=1, bias=True),
-                nn.Sigmoid()
-            )      
+        return nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(self.channels * 2, self.channels * 2 // compress_ratio, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.channels * 2 // compress_ratio, self.channels * 2, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+
     def base_forward1(self, inputs):
         outs = []
         for idx in range(len(inputs)):
@@ -791,7 +821,8 @@ class DualEUNet(nn.Module):
                     mode='bilinear',
                     align_corners=False))
         out = self.fusion_conv1(torch.cat(outs, dim=1))
-        return out 
+        return out
+
     def base_forward2(self, inputs):
         outs = []
         for idx in range(len(inputs)):
@@ -804,23 +835,23 @@ class DualEUNet(nn.Module):
                     mode='bilinear',
                     align_corners=False))
         out = self.fusion_conv2(torch.cat(outs, dim=1))
-        return out          
+        return out
+
     def cls_seg(self, feat):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
         output = self.conv_seg(feat)
-        return output    
+        return output
+
     def forward(self, x1, x2):
-        
+
         x_sar = self.encoder_sar(x2)
-        x_opt = self.encoder_opt(x1, x_sar[1:])
-        # 去除x_opt与x_sar的特征交互，改为直接调用encoder_opt而不传入x_sar特征
-        # x_opt = self.encoder_opt(x1)
+        x_opt = self.encoder_opt(x1)
 
         out1 = self.base_forward1(x_opt[1:])
         out2 = self.base_forward2(x_sar[1:])
-        
+
         out_ori = torch.cat([out1, out2], dim=1)
         # out_swap1, out_swap2 = self.freqmixenh(out1, out2)
         # out_swap = torch.cat([out_swap1, out_swap2], dim=1)
@@ -843,8 +874,8 @@ class DualEUNet(nn.Module):
 
 
 if __name__ == '__main__':
-    model = DualEUNet(3,2)
+    model = DualEUNet(3, 2)
     x1 = torch.randn(1, 3, 256, 256)
     x2 = torch.randn(1, 3, 256, 256)
-    y = model(x1,x2)
+    y = model(x1, x2)
     print(y[0].shape)
