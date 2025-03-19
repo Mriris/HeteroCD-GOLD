@@ -14,14 +14,14 @@ DEFAULT_OUTPUT_DIR = "/data/jingwei/yantingxuan/Datasets/CityCN/Enhanced"  # 输
 DEFAULT_TILE_SIZE = 512  # 切片大小
 DEFAULT_SIZE_TOLERANCE = 2  # 大小容差
 DEFAULT_APPLY_AUGMENTATION = True  # 是否应用数据增强
-DEFAULT_OVERLAP_RATIO = 0  # 裁剪重叠比例
+DEFAULT_OVERLAP_RATIO = 0.5  # 裁剪重叠比例
 
 # 数据增强方法控制（使用 True/False）
 APPLY_H_FLIP = True    # 是否应用水平翻转
 APPLY_V_FLIP = True    # 是否应用垂直翻转
-APPLY_ROT90 = False     # 是否应用90°旋转
-APPLY_ROT180 = False    # 是否应用180°旋转
-APPLY_ROT270 = False    # 是否应用270°旋转
+APPLY_ROT90 = True     # 是否应用90°旋转
+APPLY_ROT180 = True    # 是否应用180°旋转
+APPLY_ROT270 = True    # 是否应用270°旋转
 
 def tile_image_with_overlap(img, tile_size, overlap_ratio=0.5, pad_value=0):
     """

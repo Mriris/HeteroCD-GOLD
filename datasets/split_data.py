@@ -7,16 +7,18 @@ import random
 import numpy as np
 from pathlib import Path
 import shutil
+import re
+from collections import defaultdict
 
 # 默认参数设置（放在代码最上方以便于修改）
 DEFAULT_INPUT_DIR = "/data/jingwei/yantingxuan/Datasets/CityCN/Enhanced"
-DEFAULT_OUTPUT_DIR = "/data/jingwei/yantingxuan/Datasets/CityCN/Test"
+DEFAULT_OUTPUT_DIR = "/data/jingwei/yantingxuan/Datasets/CityCN/Split5"
 DEFAULT_VERIFY = False  # 是否默认验证数据集完整性
 DEFAULT_VAL_RATIO = 0.2  # 验证集占总数据的比例
 DEFAULT_TEST_FOLDER = True  # 是否创建测试集文件夹（内容与验证集相同）
 DEFAULT_CHECK_FORMAT = False  # 是否检查图像格式
-DEFAULT_SORT_BY_CHANGE_AREA = True  # 是否根据变化区域大小进行排序选择
-DEFAULT_SELECT_PERCENTAGE = 1.0  # 选择的图像百分比
+DEFAULT_SORT_BY_CHANGE_AREA = False  # 是否根据变化区域大小进行排序选择
+DEFAULT_SELECT_PERCENTAGE = 100.0  # 默认选择所有图像
 
 
 def check_image_format(img_path, required_mode=None, required_bands=None):
@@ -186,18 +188,39 @@ def calculate_change_area(label_path):
         return 0
 
 
+def extract_original_base_name(filename):
+    """
+    从预处理后的文件名中提取原始图像名称
+    预处理后的文件格式为：{base_name}_{aug_type}_x{x}_y{y}_{A/B/D/E}.{ext}
+    
+    参数:
+        filename: 文件名（含扩展名）
+    
+    返回:
+        原始图像基本名称
+    """
+    # 移除文件扩展名和A/B/D/E标识
+    base_without_ext = os.path.splitext(filename)[0]
+    if base_without_ext.endswith("_A") or base_without_ext.endswith("_B") or \
+            base_without_ext.endswith("_D") or base_without_ext.endswith("_E"):
+        base_without_ext = base_without_ext[:-2]
+
+    # 使用正则表达式匹配原始名称
+    # 这里假设原始名称后面跟着_original、_h_flip等增强类型标识和坐标信息
+    match = re.match(r'(.+?)_(original|h_flip|v_flip|rot90|rot180|rot270)_x\d+_y\d+', base_without_ext)
+    if match:
+        return match.group(1)
+
+    # 如果不匹配上述格式，可能是其他格式或原始文件，直接返回
+    return base_without_ext
+
+
 def reorganize_processed_images(input_dir, output_dir, val_ratio=0.2, create_test_folder=True, check_format=True,
                                 sort_by_change_area=False, select_percentage=100.0):
     """
-    重新组织处理后的图像文件:
-    1. _A.tif 文件移到 train/A, val/A 和 test/A 文件夹，并转换为 png
-    2. _B.tif 文件移到 train/B, val/B 和 test/B 文件夹，并转换为 png
-    3. _D.tif 文件移到 train/C, val/C 和 test/C 文件夹，并转换为 png
-    4. _E.png 文件移到 train/label, val/label 和 test/label 文件夹
-    5. 所有文件名去掉末尾的 _X 标识
-    6. 可根据变化区域大小排序并选择处理指定百分比的图像
-    7. 测试集与验证集内容相同
-
+    重新组织处理后的图像文件，确保同一原始图像的所有增强版本都分配到同一数据集
+    基于生成小块数量而非原始图像数量分割数据集，以更准确地达到指定的验证集比例
+    
     参数:
         input_dir: 处理后图像所在的输入目录
         output_dir: 重组后的输出目录基础路径
@@ -320,30 +343,70 @@ def reorganize_processed_images(input_dir, output_dir, val_ratio=0.2, create_tes
                 print("操作已取消")
                 return
 
-    # 获取图像名称列表（去除后缀）
-    base_names = [os.path.basename(file).replace("_A.tif", "") for file in files_A]
+    # 提取所有文件的原始基本名称并计算每个原始图像生成的小块数量
+    print("提取原始图像名称并统计小块数量...")
+    original_base_names = set()
+    original_to_chunks = defaultdict(int)  # 用于存储每个原始图像生成的小块数量
+    filename_to_original = {}  # 用于将文件名映射到原始图像名
+    
+    # 使用A类图像统计
+    for file_path in files_A:
+        filename = os.path.basename(file_path)
+        original_name = extract_original_base_name(filename)
+        original_base_names.add(original_name)
+        original_to_chunks[original_name] += 1
+        filename_to_original[filename] = original_name
+    
+    original_base_names = list(original_base_names)
+    total_chunks = sum(original_to_chunks.values())
+    
+    print(f"发现 {len(original_base_names)} 个原始图像，总共生成 {total_chunks} 个小块")
+    
+    # 显示小块分布统计
+    chunk_counts = sorted(original_to_chunks.values())
+    if chunk_counts:
+        print(f"每个原始图像生成的小块数量统计:")
+        print(f"  最小值: {min(chunk_counts)}")
+        print(f"  最大值: {max(chunk_counts)}")
+        print(f"  平均值: {sum(chunk_counts) / len(chunk_counts):.2f}")
+        print(f"  中位数: {chunk_counts[len(chunk_counts) // 2]}")
 
-    # 如果需要根据变化区域大小排序
+    # 如果需要根据变化区域大小排序，使用原始图像计算
     if sort_by_change_area:
-        print("根据变化区域大小排序图像...")
+        print("根据变化区域大小排序原始图像...")
         area_data = []
-        for base_name in tqdm(base_names, desc="计算变化区域"):
-            label_path = os.path.join(input_dir, f"{base_name}_E.png")
-            if os.path.exists(label_path):
-                area = calculate_change_area(label_path)
-                area_data.append((base_name, area))
+
+        for original_name in tqdm(original_base_names, desc="计算变化区域"):
+            # 查找该原始名称对应的第一个标签图像
+            matching_labels = []
+            for label_path in files_E:
+                filename = os.path.basename(label_path)
+                if extract_original_base_name(filename) == original_name:
+                    matching_labels.append(label_path)
+                    break
+
+            if matching_labels:
+                # 使用第一个匹配的标签图像计算变化区域
+                area = calculate_change_area(matching_labels[0])
+                area_data.append((original_name, area, original_to_chunks[original_name]))
+            else:
+                print(f"警告：未找到原始图像 {original_name} 的标签文件")
 
         # 根据变化区域大小降序排序
         area_data.sort(key=lambda x: x[1], reverse=True)
 
         # 选择前 select_percentage% 的图像
         select_count = int(len(area_data) * (select_percentage / 100.0))
-        selected_base_names = [data[0] for data in area_data[:select_count]]
+        selected_original_names = [data[0] for data in area_data[:select_count]]
+        
+        # 更新每个原始图像生成的小块数量
+        selected_original_to_chunks = {name: original_to_chunks[name] for name in selected_original_names}
+        selected_total_chunks = sum(selected_original_to_chunks.values())
 
-        print(f"根据变化区域大小选择了 {len(selected_base_names)} 个图像 ({select_percentage}%)")
+        print(f"根据变化区域大小选择了 {len(selected_original_names)} 个原始图像 ({select_percentage}%)，总共 {selected_total_chunks} 个小块")
 
         # 统计选择的图像的变化区域大小分布
-        if selected_base_names:
+        if selected_original_names:
             areas = [data[1] for data in area_data[:select_count]]
             print(f"选择的图像变化区域大小统计:")
             print(f"  最小值: {min(areas)}")
@@ -351,156 +414,208 @@ def reorganize_processed_images(input_dir, output_dir, val_ratio=0.2, create_tes
             print(f"  平均值: {sum(areas) / len(areas):.2f}")
             print(f"  中位数: {sorted(areas)[len(areas) // 2]}")
     else:
-        selected_base_names = base_names
-        print(f"将处理所有 {len(selected_base_names)} 个图像")
+        selected_original_names = original_base_names
+        selected_original_to_chunks = original_to_chunks
+        selected_total_chunks = total_chunks
+        print(f"将处理所有 {len(selected_original_names)} 个原始图像，总共 {selected_total_chunks} 个小块")
 
-    # 随机打乱图像顺序
-    random.shuffle(selected_base_names)
+    # 基于生成小块数量划分数据集
+    print("基于生成小块数量划分数据集...")
+    
+    # 计算验证集应该含有的小块数量
+    target_val_chunks = int(selected_total_chunks * val_ratio)
+    print(f"目标验证集小块数量: {target_val_chunks} ({val_ratio * 100:.1f}%)")
+    
+    # 随机打乱原始图像列表
+    random.shuffle(selected_original_names)
+    
+    # 贪心算法：尽量使验证集的小块数量接近目标值
+    val_original_names = []
+    train_original_names = []
+    
+    current_val_chunks = 0
+    
+    # 先将原始图像按生成小块数量排序（从大到小）
+    sorted_originals = sorted(selected_original_names, key=lambda x: selected_original_to_chunks[x], reverse=True)
+    
+    # 使用贪心算法分配图像
+    remaining_chunks = target_val_chunks
+    
+    # 第一步：优先分配大小最接近剩余所需数量的图像
+    for orig_name in sorted(sorted_originals, key=lambda x: abs(selected_original_to_chunks[x] - remaining_chunks)):
+        chunks = selected_original_to_chunks[orig_name]
+        if current_val_chunks + chunks <= target_val_chunks * 1.1:  # 允许最多超过目标值10%
+            val_original_names.append(orig_name)
+            current_val_chunks += chunks
+            remaining_chunks -= chunks
+        else:
+            train_original_names.append(orig_name)
+    
+    # 第二步：如果验证集小块数量不足，从训练集中移动一些图像到验证集
+    if current_val_chunks < target_val_chunks * 0.9:  # 如果不足目标值的90%
+        # 按小块数量从小到大排序训练集图像
+        train_original_names.sort(key=lambda x: selected_original_to_chunks[x])
+        
+        while train_original_names and current_val_chunks < target_val_chunks * 0.95:
+            # 从训练集中取出小块数量最小的图像
+            orig_name = train_original_names.pop(0)
+            chunks = selected_original_to_chunks[orig_name]
+            val_original_names.append(orig_name)
+            current_val_chunks += chunks
+    
+    # 打乱验证集和训练集的顺序（保持随机性）
+    random.shuffle(val_original_names)
+    random.shuffle(train_original_names)
+    
+    train_chunks = selected_total_chunks - current_val_chunks
+    
+    print(f"分配结果:")
+    print(f"  训练集: {len(train_original_names)} 个原始图像，{train_chunks} 个小块 ({train_chunks/selected_total_chunks*100:.1f}%)")
+    print(f"  验证集: {len(val_original_names)} 个原始图像，{current_val_chunks} 个小块 ({current_val_chunks/selected_total_chunks*100:.1f}%)")
 
-    # 确定验证集大小
-    val_size = int(len(selected_base_names) * val_ratio)
+    # 创建原始名称到目标集合的映射
+    original_to_target_set = {}
+    for name in train_original_names:
+        original_to_target_set[name] = "train"
+    for name in val_original_names:
+        original_to_target_set[name] = "val"
 
-    # 划分训练集和验证集
-    val_names = selected_base_names[:val_size]
-    train_names = selected_base_names[val_size:]
+    # 处理所有图像文件
+    processed_train = 0
+    processed_val = 0
 
-    print(f"分配 {len(train_names)} 个图像到训练集，{len(val_names)} 个图像到验证集")
-
-    # 处理训练集图像
-    for base_name in tqdm(train_names, desc="处理训练集图像"):
-        file_A = os.path.join(input_dir, f"{base_name}_A.tif")
-        file_B = os.path.join(input_dir, f"{base_name}_B.tif")
-        file_C = os.path.join(input_dir, f"{base_name}_D.tif")  # 修改为 _D.tif
-        file_E = os.path.join(input_dir, f"{base_name}_E.png")
-
-        # 检查文件是否存在
-        if not all(os.path.exists(file) for file in [file_A, file_B, file_C, file_E]):
-            print(f"警告: {base_name} 缺少部分文件，跳过")
+    # 处理A类图像
+    print("处理A类图像...")
+    for file_path in tqdm(files_A):
+        filename = os.path.basename(file_path)
+        original_name = extract_original_base_name(filename)
+        
+        # 跳过不在选择列表中的原始图像
+        if original_name not in original_to_target_set:
             continue
-
-        # 处理 A 类图像
-        target_A = os.path.join(folder_A_train, f"{base_name}.png")
+            
+        target_set = original_to_target_set[original_name]
+        new_filename = f"{filename.replace('_A.tif', '')}.png"
+        
+        if target_set == "train":
+            target_path = os.path.join(folder_A_train, new_filename)
+            processed_train += 1
+        else:  # val
+            target_path = os.path.join(folder_A_val, new_filename)
+            processed_val += 1
+            
+        # 转换并保存图像
         try:
-            with Image.open(file_A) as img:
-                img.save(target_A, "PNG")
+            with Image.open(file_path) as img:
+                img.save(target_path, "PNG")
+                
+                # 如果需要创建测试集，也复制到测试集
+                if create_test_folder and target_set == "val":
+                    test_path = os.path.join(folder_A_test, new_filename)
+                    img.save(test_path, "PNG")
         except Exception as e:
-            print(f"处理 {base_name}_A.tif 时出错: {e}")
-
-        # 处理 B 类图像
-        target_B = os.path.join(folder_B_train, f"{base_name}.png")
-        try:
-            with Image.open(file_B) as img:
-                img.save(target_B, "PNG")
-        except Exception as e:
-            print(f"处理 {base_name}_B.tif 时出错: {e}")
-
-        # 处理 C 类图像
-        target_C = os.path.join(folder_C_train, f"{base_name}.png")
-        try:
-            with Image.open(file_C) as img:
-                img.save(target_C, "PNG")
-        except Exception as e:
-            print(f"处理 {base_name}_D.tif 时出错: {e}")
-
-        # 处理标签图像，直接复制
-        target_E = os.path.join(folder_label_train, f"{base_name}.png")
-        try:
-            shutil.copy2(file_E, target_E)
-        except Exception as e:
-            print(f"处理 {base_name}_E.png 时出错: {e}")
-
-    # 处理验证集图像
-    for base_name in tqdm(val_names, desc="处理验证集图像"):
-        file_A = os.path.join(input_dir, f"{base_name}_A.tif")
-        file_B = os.path.join(input_dir, f"{base_name}_B.tif")
-        file_C = os.path.join(input_dir, f"{base_name}_D.tif")  # 修改为 _D.tif
-        file_E = os.path.join(input_dir, f"{base_name}_E.png")
-
-        # 检查文件是否存在
-        if not all(os.path.exists(file) for file in [file_A, file_B, file_C, file_E]):
-            print(f"警告: {base_name} 缺少部分文件，跳过")
+            print(f"处理 {filename} 时出错: {e}")
+    
+    # 处理B类图像
+    print("处理B类图像...")
+    for file_path in tqdm(files_B):
+        filename = os.path.basename(file_path)
+        original_name = extract_original_base_name(filename)
+        
+        # 跳过不在选择列表中的原始图像
+        if original_name not in original_to_target_set:
             continue
-
-        # 处理 A 类图像
-        target_A = os.path.join(folder_A_val, f"{base_name}.png")
+            
+        target_set = original_to_target_set[original_name]
+        new_filename = f"{filename.replace('_B.tif', '')}.png"
+        
+        if target_set == "train":
+            target_path = os.path.join(folder_B_train, new_filename)
+        else:  # val
+            target_path = os.path.join(folder_B_val, new_filename)
+            
+        # 转换并保存图像
         try:
-            with Image.open(file_A) as img:
-                img.save(target_A, "PNG")
+            with Image.open(file_path) as img:
+                img.save(target_path, "PNG")
+                
+                # 如果需要创建测试集，也复制到测试集
+                if create_test_folder and target_set == "val":
+                    test_path = os.path.join(folder_B_test, new_filename)
+                    img.save(test_path, "PNG")
         except Exception as e:
-            print(f"处理 {base_name}_A.tif 时出错: {e}")
-
-        # 处理 B 类图像
-        target_B = os.path.join(folder_B_val, f"{base_name}.png")
+            print(f"处理 {filename} 时出错: {e}")
+    
+    # 处理C类图像
+    print("处理C类图像...")
+    for file_path in tqdm(files_C):
+        filename = os.path.basename(file_path)
+        original_name = extract_original_base_name(filename)
+        
+        # 跳过不在选择列表中的原始图像
+        if original_name not in original_to_target_set:
+            continue
+            
+        target_set = original_to_target_set[original_name]
+        new_filename = f"{filename.replace('_D.tif', '')}.png"
+        
+        if target_set == "train":
+            target_path = os.path.join(folder_C_train, new_filename)
+        else:  # val
+            target_path = os.path.join(folder_C_val, new_filename)
+            
+        # 转换并保存图像
         try:
-            with Image.open(file_B) as img:
-                img.save(target_B, "PNG")
+            with Image.open(file_path) as img:
+                img.save(target_path, "PNG")
+                
+                # 如果需要创建测试集，也复制到测试集
+                if create_test_folder and target_set == "val":
+                    test_path = os.path.join(folder_C_test, new_filename)
+                    img.save(test_path, "PNG")
         except Exception as e:
-            print(f"处理 {base_name}_B.tif 时出错: {e}")
-
-        # 处理 C 类图像
-        target_C = os.path.join(folder_C_val, f"{base_name}.png")
+            print(f"处理 {filename} 时出错: {e}")
+    
+    # 处理标签图像
+    print("处理标签图像...")
+    for file_path in tqdm(files_E):
+        filename = os.path.basename(file_path)
+        original_name = extract_original_base_name(filename)
+        
+        # 跳过不在选择列表中的原始图像
+        if original_name not in original_to_target_set:
+            continue
+            
+        target_set = original_to_target_set[original_name]
+        new_filename = f"{filename.replace('_E.png', '')}.png"
+        
+        if target_set == "train":
+            target_path = os.path.join(folder_label_train, new_filename)
+        else:  # val
+            target_path = os.path.join(folder_label_val, new_filename)
+            
+        # 复制标签图像
         try:
-            with Image.open(file_C) as img:
-                img.save(target_C, "PNG")
+            shutil.copy2(file_path, target_path)
+            
+            # 如果需要创建测试集，也复制到测试集
+            if create_test_folder and target_set == "val":
+                test_path = os.path.join(folder_label_test, new_filename)
+                shutil.copy2(file_path, test_path)
         except Exception as e:
-            print(f"处理 {base_name}_D.tif 时出错: {e}")
-
-        # 处理标签图像，直接复制
-        target_E = os.path.join(folder_label_val, f"{base_name}.png")
-        try:
-            shutil.copy2(file_E, target_E)
-        except Exception as e:
-            print(f"处理 {base_name}_E.png 时出错: {e}")
-
-    # 处理测试集图像（如果需要）
-    if create_test_folder:
-        for base_name in tqdm(val_names, desc="处理测试集图像"):
-            file_A = os.path.join(input_dir, f"{base_name}_A.tif")
-            file_B = os.path.join(input_dir, f"{base_name}_B.tif")
-            file_C = os.path.join(input_dir, f"{base_name}_D.tif")  # 修改为 _D.tif
-            file_E = os.path.join(input_dir, f"{base_name}_E.png")
-
-            # 检查文件是否存在
-            if not all(os.path.exists(file) for file in [file_A, file_B, file_C, file_E]):
-                print(f"警告: {base_name} 缺少部分文件，跳过")
-                continue
-
-            # 处理 A 类图像
-            target_A = os.path.join(folder_A_test, f"{base_name}.png")
-            try:
-                with Image.open(file_A) as img:
-                    img.save(target_A, "PNG")
-            except Exception as e:
-                print(f"处理 {base_name}_A.tif 时出错: {e}")
-
-            # 处理 B 类图像
-            target_B = os.path.join(folder_B_test, f"{base_name}.png")
-            try:
-                with Image.open(file_B) as img:
-                    img.save(target_B, "PNG")
-            except Exception as e:
-                print(f"处理 {base_name}_B.tif 时出错: {e}")
-
-            # 处理 C 类图像
-            target_C = os.path.join(folder_C_test, f"{base_name}.png")
-            try:
-                with Image.open(file_C) as img:
-                    img.save(target_C, "PNG")
-            except Exception as e:
-                print(f"处理 {base_name}_D.tif 时出错: {e}")
-
-            # 处理标签图像，直接复制
-            target_E = os.path.join(folder_label_test, f"{base_name}.png")
-            try:
-                shutil.copy2(file_E, target_E)
-            except Exception as e:
-                print(f"处理 {base_name}_E.png 时出错: {e}")
+            print(f"处理 {filename} 时出错: {e}")
 
     print("处理完成！")
-    print(f"训练集大小: {len(train_names)}")
-    print(f"验证集大小: {len(val_names)}")
+    
+    # 计算实际处理的图像总数
+    train_A_count = len(os.listdir(folder_A_train))
+    val_A_count = len(os.listdir(folder_A_val))
+    test_A_count = len(os.listdir(folder_A_test)) if create_test_folder else 0
+    
+    print(f"训练集大小: {train_A_count} 图像 ({train_A_count/(train_A_count+val_A_count)*100:.1f}%)")
+    print(f"验证集大小: {val_A_count} 图像 ({val_A_count/(train_A_count+val_A_count)*100:.1f}%)")
     if create_test_folder:
-        print(f"测试集大小: {len(val_names)}")
+        print(f"测试集大小: {test_A_count} 图像")
     print(f"输出目录: {output_dir}")
 
 
