@@ -70,7 +70,7 @@ class Up(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        # if bilinear, use the normal convolutions to reduce the number of channels
+        # 如果是双线性插值,使用普通卷积来减少通道数
 
         self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=4, stride=2,
                                      padding=1)
@@ -78,15 +78,18 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # 输入是CHW
+        # 计算特征图尺寸差异
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
+        # 对x1进行padding以匹配x2的尺寸
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see
+        # 如果遇到padding问题,可以参考:
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
+        
+        # 特征拼接
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -210,6 +213,7 @@ def resize(input,
 
 
 class UpsampleConvLayer(torch.nn.Module):
+    """上采样卷积层"""
     def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(UpsampleConvLayer, self).__init__()
         self.conv2d = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=stride, padding=1)
@@ -220,7 +224,7 @@ class UpsampleConvLayer(torch.nn.Module):
 
 
 class MLP(nn.Module):
-    """MLP头部"""
+    """MLP头部,用于特征变换"""
     
     def __init__(self, input_dim=2048, embed_dim=768):
         super().__init__()
@@ -233,67 +237,67 @@ class MLP(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
+    """多头注意力机制"""
     def __init__(self, query_dim, key_dim, mid_channel, out_channel, num_heads):
         super().__init__()
         self.num_units = mid_channel
         self.num_heads = num_heads
         self.key_dim = key_dim
+        # 定义Q、K、V的线性变换
         self.W_query = nn.Conv2d(query_dim, self.num_units, kernel_size=1, stride=1)
         self.W_key = nn.Conv2d(key_dim, self.num_units, kernel_size=1, stride=1)
         self.W_value = nn.Conv2d(key_dim, self.num_units, kernel_size=1, stride=1)
-        # self.out_conv = nn.Conv2d(self.num_units, out_channel,kernel_size=1, stride=1)
 
     def forward(self, query, key, mask=None):
-        querys = self.W_query(query)  # [N, T_q, num_units]
-
-        keys = self.W_key(key)  # [N, T_k, num_units]
-        # print(keys.shape)
+        # 生成Q、K、V
+        querys = self.W_query(query)  
+        keys = self.W_key(key)  
         values = self.W_value(key)
         b, c, h, w = values.shape
 
+        # 重塑张量维度
         querys = querys.view(querys.shape[0], querys.shape[1], -1)
         keys = keys.view(keys.shape[0], keys.shape[1], -1)
         values = values.view(values.shape[0], values.shape[1], -1)
 
+        # 多头分割
         split_size = self.num_units // self.num_heads
-        querys = torch.stack(torch.split(querys, split_size, dim=1), dim=0)  # [h, N, T_q, num_units/h]
-        keys = torch.stack(torch.split(keys, split_size, dim=1), dim=0)  # [h, N, T_k, num_units/h]
-        values = torch.stack(torch.split(values, split_size, dim=1), dim=0)  # [h, N, T_k, num_units/h]
-        ## score = softmax(QK^T / (d_k ** 0.5))
+        querys = torch.stack(torch.split(querys, split_size, dim=1), dim=0)  
+        keys = torch.stack(torch.split(keys, split_size, dim=1), dim=0)  
+        values = torch.stack(torch.split(values, split_size, dim=1), dim=0)  
 
-        scores = torch.matmul(querys, keys.transpose(2, 3))  # [h, N, T_q, T_k]
-
+        # 计算注意力分数
+        scores = torch.matmul(querys, keys.transpose(2, 3))  
         scores = scores / (self.key_dim ** 0.5)
-        ## mask
+
+        # 应用mask(如果有)
         if mask is not None:
-            ## mask:  [N, T_k] --> [h, N, T_q, T_k]
             mask = mask.unsqueeze(1).unsqueeze(0).repeat(self.num_heads, 1, querys.shape[2], 1)
             scores = scores.masked_fill(mask, -np.inf)
+            
+        # softmax归一化并计算输出
         scores = F.softmax(scores, dim=3)
         out = torch.matmul(scores, values)
-        # print(out.shape)
-        out = torch.cat(torch.split(out, 1, dim=0), dim=2).squeeze(0)  # [N, T_q, num_units]
-        # out = out.permute(0, 2, 1, 3).contiguous()
+        out = torch.cat(torch.split(out, 1, dim=0), dim=2).squeeze(0)  
         out = out.view(b, c, h, w)
-        # print(scores.shape, out.shape)
-        # out = scores*values
         return out
 
 
 class CD_Decoder(nn.Module):
-    """
-    Transformer Decoder
+    """变化检测解码器
+    
+    用于解码和融合多尺度特征,生成最终的变化检测结果
     """
 
     def __init__(self, input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=True,
                  in_channels=[64, 128, 256, 512], embedding_dim=64, output_nc=2,
                  decoder_softmax=False, feature_strides=[2, 4, 8, 16]):
         super(CD_Decoder, self).__init__()
-        # assert
+        # 参数检查
         assert len(feature_strides) == len(in_channels)
         assert min(feature_strides) == feature_strides[0]
 
-        # settings
+        # 基本设置
         self.feature_strides = feature_strides
         self.input_transform = input_transform
         self.in_index = in_index
@@ -303,48 +307,45 @@ class CD_Decoder(nn.Module):
         self.output_nc = output_nc
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
 
-        # MLP decoder heads
+        # MLP解码器头
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=c4_in_channels)
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=c3_in_channels)
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=c2_in_channels)
         self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=c1_in_channels)
 
-        # convolutional Difference Modules
+        # 卷积差异模块
         self.diff_c4 = conv_diff(in_channels=2 * c4_in_channels, out_channels=self.embedding_dim)
         self.diff_c3 = conv_diff(in_channels=2 * c3_in_channels, out_channels=self.embedding_dim)
         self.diff_c2 = conv_diff(in_channels=2 * c2_in_channels, out_channels=self.embedding_dim)
         self.diff_c1 = conv_diff(in_channels=2 * c1_in_channels, out_channels=self.embedding_dim)
 
-        # taking outputs from middle of the encoder
+        # 中间预测模块
         self.make_pred_c4 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c3 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c2 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
         self.make_pred_c1 = make_prediction(in_channels=self.embedding_dim, out_channels=self.output_nc)
 
-        # Final linear fusion layer
+        # 特征融合层
         self.linear_fuse = nn.Sequential(
             nn.Conv2d(in_channels=self.embedding_dim * len(in_channels), out_channels=self.embedding_dim,
                       kernel_size=1),
             nn.BatchNorm2d(self.embedding_dim)
         )
 
-        # Final predction head
+        # 最终预测头
         self.convd2x = nn.Sequential(ResidualBlock(self.embedding_dim))
-        # self.dense_2x   = nn.Sequential( ResidualBlock(self.embedding_dim))
-        # self.convd1x    = nn.Sequential( ResidualBlock(self.embedding_dim))
-        # self.dense_1x   = nn.Sequential( ResidualBlock(self.embedding_dim))
         self.change_probability = ConvLayer(self.embedding_dim, self.output_nc, kernel_size=3, stride=1, padding=1)
 
-        # Final activation
+        # 输出激活
         self.output_softmax = decoder_softmax
         self.active = nn.Sigmoid()
 
     def _transform_inputs(self, inputs):
-        """Transform inputs for decoder.
-        Args:
-            inputs (list[Tensor]): List of multi-level img features.
-        Returns:
-            Tensor: The transformed inputs
+        """转换解码器的输入。
+        参数:
+            inputs (list[Tensor]): 多层级图像特征列表。
+        返回:
+            Tensor: 转换后的输入
         """
 
         if self.input_transform == 'resize_concat':
@@ -365,19 +366,19 @@ class CD_Decoder(nn.Module):
         return inputs
 
     def forward(self, inputs1, inputs2):
-        # Transforming encoder features (select layers)
-        x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
-        x_2 = self._transform_inputs(inputs2)  # len=4, 1/2, 1/4, 1/8, 1/16
+        # 转换编码器特征(选择层)
+        x_1 = self._transform_inputs(inputs1)  # 长度=4, 1/2, 1/4, 1/8, 1/16
+        x_2 = self._transform_inputs(inputs2)  # 长度=4, 1/2, 1/4, 1/8, 1/16
 
-        # img1 and img2 features
+        # 图像1和图像2的特征
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
-        ############## MLP decoder on C1-C4 ###########
+        # MLP解码器处理C1-C4
         n, _, h, w = c4_1.shape
 
         outputs = []
-        # Stage 4: x1/32 scale
+        # 第4阶段: 1/32尺度
         _c4_1 = self.linear_c4(c4_1).permute(0, 2, 1).reshape(n, -1, c4_1.shape[2], c4_1.shape[3])
         _c4_2 = self.linear_c4(c4_2).permute(0, 2, 1).reshape(n, -1, c4_2.shape[2], c4_2.shape[3])
         _c4 = self.diff_c4(torch.cat((_c4_1, _c4_2), dim=1))
@@ -385,7 +386,7 @@ class CD_Decoder(nn.Module):
         outputs.append(p_c4)
         _c4_up = resize(_c4, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
-        # Stage 3: x1/16 scale
+        # 第3阶段: 1/16尺度
         _c3_1 = self.linear_c3(c3_1).permute(0, 2, 1).reshape(n, -1, c3_1.shape[2], c3_1.shape[3])
         _c3_2 = self.linear_c3(c3_2).permute(0, 2, 1).reshape(n, -1, c3_2.shape[2], c3_2.shape[3])
         _c3 = self.diff_c3(torch.cat((_c3_1, _c3_2), dim=1)) + F.interpolate(_c4, scale_factor=2, mode="bilinear")
@@ -393,7 +394,7 @@ class CD_Decoder(nn.Module):
         outputs.append(p_c3)
         _c3_up = resize(_c3, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
-        # Stage 2: x1/8 scale
+        # 第2阶段: 1/8尺度
         _c2_1 = self.linear_c2(c2_1).permute(0, 2, 1).reshape(n, -1, c2_1.shape[2], c2_1.shape[3])
         _c2_2 = self.linear_c2(c2_2).permute(0, 2, 1).reshape(n, -1, c2_2.shape[2], c2_2.shape[3])
         _c2 = self.diff_c2(torch.cat((_c2_1, _c2_2), dim=1)) + F.interpolate(_c3, scale_factor=2, mode="bilinear")
@@ -401,31 +402,20 @@ class CD_Decoder(nn.Module):
         outputs.append(p_c2)
         _c2_up = resize(_c2, size=c1_2.size()[2:], mode='bilinear', align_corners=False)
 
-        # Stage 1: x1/4 scale
+        # 第1阶段: 1/4尺度
         _c1_1 = self.linear_c1(c1_1).permute(0, 2, 1).reshape(n, -1, c1_1.shape[2], c1_1.shape[3])
         _c1_2 = self.linear_c1(c1_2).permute(0, 2, 1).reshape(n, -1, c1_2.shape[2], c1_2.shape[3])
         _c1 = self.diff_c1(torch.cat((_c1_1, _c1_2), dim=1)) + F.interpolate(_c2, scale_factor=2, mode="bilinear")
         p_c1 = self.make_pred_c1(_c1)
         outputs.append(p_c1)
 
-        # Linear Fusion of difference image from all scales
+        # 线性融合所有尺度的差异图像
         _c = self.linear_fuse(torch.cat((_c4_up, _c3_up, _c2_up, _c1), dim=1))
-        # #Dropout
-        # if dropout_ratio > 0:
-        #     self.dropout = nn.Dropout2d(dropout_ratio)
-        # else:
-        #     self.dropout = None
 
-        # Upsampling x2 (x1/2 scale)
+        # 上采样x2 (1/2尺度)
         x = self.convd2x(_c)
-        # Residual block
-        # x = self.dense_2x(x)
-        # #Upsampling x2 (x1 scale)
-        # x = self.convd1x(x)
-        # #Residual block
-        # x = self.dense_1x(x)
 
-        # Final prediction
+        # 最终预测
         cp = self.change_probability(x)
 
         outputs.append(cp)
@@ -440,20 +430,20 @@ class CD_Decoder(nn.Module):
 
 
 class MixFFN(nn.Module):
-    """An implementation of MixFFN of Segformer.
-    Args:
-        embed_dims (int): The feature dimension. Same as
-            `MultiheadAttention`. Defaults: 256.
-        feedforward_channels (int): The hidden dimension of FFNs.
-            Defaults: 1024.
-        act_cfg (dict, optional): The activation config for FFNs.
-            Default: dict(type='ReLU')
-        ffn_drop (float, optional): Probability of an element to be
-            zeroed in FFN. Default 0.0.
-        dropout_layer (dict, optional): The dropout_layer used
-            when adding the shortcut. Default: None.
-        init_cfg (dict, optional): The Config for initialization.
-            Default: None.
+    """Segformer的MixFFN实现。
+    参数:
+        embed_dims (int): 特征维度。与MultiheadAttention相同。
+            默认值: 256。
+        feedforward_channels (int): FFN的隐藏维度。
+            默认值: 1024。
+        act_cfg (dict, optional): FFN的激活函数配置。
+            默认值: dict(type='ReLU')。
+        ffn_drop (float, optional): FFN中元素被置零的概率。
+            默认值: 0.0。
+        dropout_layer (dict, optional): 添加残差连接时使用的dropout层。
+            默认值: None。
+        init_cfg (dict, optional): 初始化配置。
+            默认值: None。
     """
 
     def __init__(self,
@@ -478,7 +468,7 @@ class MixFFN(nn.Module):
             kernel_size=1,
             stride=1,
             bias=True)
-        # 3x3 depth wise conv to provide positional encode information
+        # 3x3深度可分离卷积,提供位置编码信息
         self.pe_conv = nn.Conv2d(
             in_channels=feedforward_channels,
             out_channels=feedforward_channels,
@@ -504,7 +494,7 @@ class MixFFN(nn.Module):
         elif act_type == 'GELU':
             return nn.GELU()
         else:
-            raise ValueError(f"Unsupported activation type: {act_type}")
+            raise ValueError(f"不支持的激活函数类型: {act_type}")
 
     def build_dropout(self, dropout_cfg):
         drop_prob = dropout_cfg.get('p', 0.5)
@@ -672,18 +662,29 @@ class FrequencyEnh(nn.Module):
 
 class DualEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
+        """双分支EUNet网络
+        参数:
+            n_channels (int): 输入通道数
+            n_classes (int): 输出类别数
+            bilinear (bool): 是否使用双线性插值上采样
+        """
         super(DualEUNet, self).__init__()
+        # 光学图像编码器
         self.encoder_opt = resnet18()
+        # SAR图像编码器 
         self.encoder_sar = resnet18()
+        # 生成器解码器
         self.gen_decoder = Decoder(n_classes)
+        # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
-        # self.cd_decoder   = CD_Decoder(input_transform='multiple_select', in_index=[1, 2, 3, 4], align_corners=False, 
-        #              embedding_dim= 256, output_nc=2, 
-        #             decoder_softmax = False, feature_strides=[2, 4, 8, 16])
+        
+        # 特征融合相关参数和层
         self.convs1 = nn.ModuleList()
         self.convs2 = nn.ModuleList()
         self.in_channels = [64, 128, 256, 512]
         self.channels = 128
+        
+        # 特征融合卷积层
         self.fusion_conv1 = nn.Sequential(
             nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
             nn.BatchNorm2d(self.channels // 2),
@@ -692,6 +693,8 @@ class DualEUNet(nn.Module):
             nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
             nn.BatchNorm2d(self.channels // 2),
         )
+        
+        # 生成器特征融合卷积层
         self.fusion_gen_conv1 = nn.Sequential(
             nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
             nn.BatchNorm2d(self.channels // 2),
@@ -700,7 +703,11 @@ class DualEUNet(nn.Module):
             nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
             nn.BatchNorm2d(self.channels // 2),
         )
+        
+        # 分割输出层
         self.conv_seg = nn.Conv2d(self.channels, 2, kernel_size=1)
+        
+        # 特征转换卷积层
         for i in range(len(self.in_channels)):
             self.convs1.append(
                 nn.Sequential(
@@ -717,12 +724,14 @@ class DualEUNet(nn.Module):
                     nn.ReLU()
                 )
             )
-        # self.cross_atten1 = MultiHeadAttention(self.channels//2,self.channels//2,self.channels//2,self.channels//2,8)
-        # self.cross_atten2 = MultiHeadAttention(self.channels//2,self.channels//2,self.channels//2,self.channels//2,8)
+        
+        # 注意力和增强模块
         self.atten = self._make_channel_att_layer(compress_ratio=16)
         self.freqmixenh = FrequencyMixEnh(in_channels=self.channels)
         self.fusion_layer = nn.Sequential(nn.Conv2d(self.channels * 2, self.channels, kernel_size=1),
                                           nn.GELU())
+        
+        # 特征融合和判别器FFN
         self.atten_fusion_ffn = MixFFN(
             embed_dims=self.channels,
             feedforward_channels=self.channels,
@@ -737,6 +746,10 @@ class DualEUNet(nn.Module):
             act_cfg=dict(type='GELU'))
 
     def _make_channel_att_layer(self, compress_ratio):
+        """创建通道注意力层
+        参数:
+            compress_ratio (int): 压缩比率
+        """
         return nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(self.channels * 2, self.channels * 2 // compress_ratio, kernel_size=1, bias=True),
@@ -746,6 +759,10 @@ class DualEUNet(nn.Module):
         )
 
     def base_forward1(self, inputs):
+        """光学图像特征前向传播
+        参数:
+            inputs (list): 多尺度特征列表
+        """
         outs = []
         for idx in range(len(inputs)):
             x = inputs[idx]
@@ -760,6 +777,10 @@ class DualEUNet(nn.Module):
         return out
 
     def base_forward2(self, inputs):
+        """SAR图像特征前向传播
+        参数:
+            inputs (list): 多尺度特征列表
+        """
         outs = []
         for idx in range(len(inputs)):
             x = inputs[idx]
@@ -774,23 +795,34 @@ class DualEUNet(nn.Module):
         return out
 
     def cls_seg(self, feat):
-        """Classify each pixel."""
+        """像素级分类
+        参数:
+            feat (Tensor): 输入特征
+        """
         if self.dropout is not None:
             feat = self.dropout(feat)
         output = self.conv_seg(feat)
         return output
 
     def forward(self, x1, x2):
-
+        """网络前向传播
+        参数:
+            x1 (Tensor): 光学图像输入
+            x2 (Tensor): SAR图像输入
+        """
+        # 编码器特征提取
         x_sar = self.encoder_sar(x2)
         x_opt = self.encoder_opt(x1)
 
+        # 特征融合
         out1 = self.base_forward1(x_opt[1:])
         out2 = self.base_forward2(x_sar[1:])
 
+        # 判别器处理
         out_ori = torch.cat([out1, out2], dim=1)
         out_ori = self.discriminator(out_ori)
 
+        # 分割输出
         out = self.cls_seg(out_ori)
 
         return out
