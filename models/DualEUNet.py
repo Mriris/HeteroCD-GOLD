@@ -7,7 +7,7 @@ import numpy as np
 
 
 class DoubleConv_down(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
+    """(卷积 => [BN] => ReLU) * 2"""
 
     def __init__(self, in_channels, out_channels, mid_channels=None):
         super().__init__()
@@ -29,7 +29,7 @@ class DoubleConv_down(nn.Module):
 
 
 class DoubleConv_up(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
+    """(卷积 => [BN] => ReLU) * 2"""
 
     def __init__(self, in_channels, out_channels, mid_channels=None):
         super().__init__()
@@ -51,7 +51,7 @@ class DoubleConv_up(nn.Module):
 
 
 class Down(nn.Module):
-    """Downscaling with maxpool then double conv"""
+    """通过最大池化然后双卷积进行下采样"""
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -65,7 +65,7 @@ class Down(nn.Module):
 
 
 class Up(nn.Module):
-    """Upscaling then double conv"""
+    """上采样然后双卷积"""
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -78,7 +78,7 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # input is CHW
+        # 输入是CHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
@@ -99,55 +99,6 @@ class OutConv(nn.Module):
     def forward(self, x):
         return nn.Tanh()(self.conv(x))
 
-
-# class Encoder(nn.Module):
-#     def __init__(self, n_channels, bilinear=False):
-#         super(Encoder, self).__init__()
-#         self.inc = DoubleConv_down(n_channels, 64)
-#         self.down1 = Down(64, 128)
-#         self.down2 = Down(128, 256)
-#         self.down3 = Down(256, 512)
-#         factor = 2 if bilinear else 1
-#         self.down4 = Down(512, 1024 // factor)
-
-#     def forward(self, x):
-#         x1 = self.inc(x)
-#         x2 = self.down1(x1)
-#         x3 = self.down2(x2)
-#         x4 = self.down3(x3)
-#         x5 = self.down4(x4)
-#         return [x1, x2, x3, x4, x5]
-
-
-# class Decoder(nn.Module):
-#     def __init__(self, n_classes):
-#         super(Decoder, self).__init__()
-#         self.conv = nn.Sequential(
-#         nn.Conv2d(512+256, 128, kernel_size=3, padding=1),
-#         nn.ReLU(),
-#         nn.BatchNorm2d(128),
-#         nn.Conv2d(128, 32, kernel_size=3, padding=1),
-#         nn.ReLU(),
-#         nn.BatchNorm2d(32),
-#     )
-#         self.outc = OutConv(32, n_classes)
-
-#     def forward(self, inputs1, inputs2):
-#         # print(x.shape,inputs[0].shape)
-#                 # print("解码器输出")
-#         for i in range(len(inputs1)):
-#             print(x_opt[i].shape)
-#         x1 = inputs1[-2]
-#         x2 = F.interpolate(inputs1[-1], size=x1.size()[2:], mode='bilinear', align_corners=False)
-#         x = torch.cat([x1, x2], dim=1)
-#         x = self.conv(x)
-#         logits1 = self.outc(x)
-#         x1 = inputs2[-2]
-#         x2 = F.interpolate(inputs2[-1], size=x1.size()[2:], mode='bilinear', align_corners=False)
-#         x = torch.cat([x1, x2], dim=1)
-#         x = self.conv(x)
-#         logits2 = self.outc(x)
-#         return logits1,logits2
 class Decoder(nn.Module):
     def __init__(self, n_classes):
         super(Decoder, self).__init__()
@@ -190,7 +141,7 @@ class Decoder(nn.Module):
         return logits1, logits2, x1, x2
 
 
-# Difference module
+# 差异模块
 def conv_diff(in_channels, out_channels):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -204,12 +155,9 @@ def conv_diff(in_channels, out_channels):
 class ConvLayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
         super(ConvLayer, self).__init__()
-        #         reflection_padding = kernel_size // 2
-        #         self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
         self.conv2d = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
 
     def forward(self, x):
-        #         out = self.reflection_pad(x)
         out = self.conv2d(x)
         return out
 
@@ -229,7 +177,7 @@ class ResidualBlock(torch.nn.Module):
         return out
 
 
-# Intermediate prediction module
+# 中间预测模块
 def make_prediction(in_channels, out_channels):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -272,10 +220,8 @@ class UpsampleConvLayer(torch.nn.Module):
 
 
 class MLP(nn.Module):
-    """
-    Linear Embedding
-    """
-
+    """MLP头部"""
+    
     def __init__(self, input_dim=2048, embed_dim=768):
         super().__init__()
         self.proj = nn.Linear(input_dim, embed_dim)
@@ -578,11 +524,11 @@ class MixFFN(nn.Module):
 
 
 class eca_layer(nn.Module):
-    """Constructs a ECA module.
+    """构建ECA模块。
 
-    Args:
-        channel: Number of channels of the input feature map
-        k_size: Adaptive selection of kernel size
+    参数:
+        channel: 输入特征图的通道数
+        k_size: 自适应选择的核大小
     """
 
     def __init__(self, channel, k_size=3):
@@ -592,13 +538,13 @@ class eca_layer(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        # feature descriptor on the global spatial information
+        # 在全局空间信息上的特征描述符
         y = self.avg_pool(x)
 
-        # Two different branches of ECA module
+        # ECA模块的两个不同分支
         y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
 
-        # Multi-scale information fusion
+        # 多尺度信息融合
         y = self.sigmoid(y)
 
         # return x * y.expand_as(x)
@@ -610,16 +556,6 @@ class FrequencyMixEnh(nn.Module):
         super(FrequencyMixEnh, self).__init__()
         self.in_channels = in_channels * 2
 
-    #     self.channel_att1 = self._make_channel_att_layer(compress_ratio)
-    #     self.channel_att2 = self._make_channel_att_layer(compress_ratio)
-    # def _make_channel_att_layer(self, compress_ratio):
-    #     return nn.Sequential(
-    #         nn.AdaptiveAvgPool2d(1),
-    #         nn.Conv2d(self.in_channels, self.in_channels // compress_ratio, kernel_size=1, bias=True),
-    #         nn.ReLU(inplace=True),
-    #         nn.Conv2d(self.in_channels // compress_ratio, self.in_channels, kernel_size=1, bias=True),
-    #         nn.Sigmoid()
-    #     )
     def forward(self, feature1, feature2):
         # 对两组特征进行傅里叶变换
         fft_feature1 = torch.fft.fft2(feature1)
@@ -668,16 +604,16 @@ class FrequencyEnh(nn.Module):
         self.lp_type = lp_type
         self.channel_res = channel_res
         self.spatial_group = min(spatial_group, in_channels)
-        self.freq_thres = 0.35  # Increased for more flexibility
+        self.freq_thres = 0.35  # 增加阈值以提高灵活性
 
-        # Frequency weight convolution layer
+        # 频率权重卷积层
         if spatial == 'conv':
             self.freq_weight_conv = nn.Conv2d(in_channels, (len(k_list) + 1) * self.spatial_group,
                                               kernel_size=3, padding=1, bias=True)
         else:
-            raise NotImplementedError("Only 'conv' is implemented for spatial dimension.")
+            raise NotImplementedError("空间维度只实现了'conv'方法。")
 
-        # Channel attention layers for low and high frequencies
+        # 低频和高频的通道注意力层
         self.channel_att_low = self._make_channel_att_layer(compress_ratio)
         self.channel_att_high = self._make_channel_att_layer(compress_ratio)
 
@@ -693,24 +629,24 @@ class FrequencyEnh(nn.Module):
         )
 
     def forward(self, x):
-        # Generate frequency weights
+        # 生成频率权重
         freq_weight = self.act_func(self.freq_weight_conv(x))
         if isinstance(self.act_func, nn.Softmax):
             freq_weight *= freq_weight.shape[1]
 
-        # Fourier Transform and masks
+        # 傅里叶变换和掩码
         x_fft = torch.fft.fftshift(torch.fft.fft2(x))
         low_mask, high_mask = self._get_frequency_masks(x_fft.shape[2:], x.device)
 
-        # Separate into low and high frequency components
+        # 分离低频和高频分量
         low_part = torch.fft.ifft2(torch.fft.ifftshift(x_fft * low_mask)).real
         high_part = x - low_part
 
-        # Channel attention for low and high frequencies
+        # 低频和高频的通道注意力
         low_att = self._apply_channel_attention(self.channel_att_low, low_mask, x_fft)
         high_att = self._apply_channel_attention(self.channel_att_high, high_mask, x_fft)
         print(low_att.shape, high_att.shape)
-        # Frequency weighting
+        # 频率加权
         low_part = low_part * freq_weight[:, :1] * low_att
         high_part = high_part * freq_weight[:, 1:2] * high_att
         res = low_part + high_part
@@ -853,23 +789,10 @@ class DualEUNet(nn.Module):
         out2 = self.base_forward2(x_sar[1:])
 
         out_ori = torch.cat([out1, out2], dim=1)
-        # out_swap1, out_swap2 = self.freqmixenh(out1, out2)
-        # out_swap = torch.cat([out_swap1, out_swap2], dim=1)
-        # # print(out.shape)
-        # # out = self.freqmixenh(out)
-        # # print(out.shape)
         out_ori = self.discriminator(out_ori)
-        # out_swap = self.discriminator(out_swap)
-        # out = torch.cat([out_ori, out_swap], dim=1)
-        # out_atten = self.atten(out)
-        # # print(out_atten.shape)
-        # out = out*out_atten
-        # out = self.fusion_layer(out)
-        # out = self.atten_fusion_ffn(out)
-        # print(out_ori.shape)
+
         out = self.cls_seg(out_ori)
-        # print(opt_gen.shape)
-        # print(out.shape)
+
         return out
 
 
