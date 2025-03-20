@@ -14,7 +14,7 @@ class TrainOptions():
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
         parser.add_argument('--name', type=str, default='hetegan_base',
                             help='实验名称。决定了在哪里存储样本和模型')
-        parser.add_argument('--gpu_ids', type=str, default='0,1,2,3',
+        parser.add_argument('--gpu_ids', type=str, default='0',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints4', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
@@ -36,7 +36,7 @@ class TrainOptions():
         # 训练参数
         parser.add_argument('--load_size', type=int, default=512, help='将图像缩放到此大小')
         parser.add_argument('--crop_size', type=int, default=512, help='然后裁剪到此大小')
-        parser.add_argument('--n_epochs', type=int, default=400, help='使用初始学习率的epoch数量')
+        parser.add_argument('--n_epochs', type=int, default=200, help='使用初始学习率的epoch数量')
         parser.add_argument('--beta1', type=float, default=0.5, help='adam的动量项')
         parser.add_argument('--lr', type=float, default=0.0005, help='adam的初始学习率')
         parser.add_argument('--lr_policy', type=str, default='cosine',
