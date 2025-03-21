@@ -101,6 +101,14 @@ if __name__ == '__main__':
         #         %(epoch,{key: score[key] for key in score}))
         print('训练轮次: %d 评分: %s' % (epoch, {key: score[key] for key in score}))
 
+        # 记录训练结果
+        train_score = score
+        train_iou = score['iou_1']  # 保存训练集上的iou_1
+
+        # 获取训练损失
+        train_losses = model.get_current_losses()
+        train_loss = sum(train_losses.values()) if train_losses else 0
+
         best_preds_dir = os.path.join(opt.checkpoints_dir, opt.name, "results")
         if not os.path.exists(best_preds_dir):
             os.makedirs(best_preds_dir)
@@ -132,10 +140,47 @@ if __name__ == '__main__':
                 cv2.imwrite(save_path, preds_all[i] * 255)
             print('更新最佳IoU模型')
         with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
-            f.write('Epoch: %d  best_iou: %.2f  Val loss: %.2f  score: %s\n' % (epoch, best_iou, val_loss.average(),
-                                                                                {key: score[key] for key in score}))
-        print('训练轮次: %d  最佳IoU: %.2f  验证损失: %.2f  评分: %s\n' % (epoch, best_iou, val_loss.average(),
-                                                                          {key: score[key] for key in score}))
+            # 添加分隔行
+            f.write('='*100 + '\n')
+            # 合并展示训练和验证结果
+            f.write('【Epoch: %d】训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
+                   (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+
+            # 对比展示关键指标 - 使用固定宽度确保对齐
+            f.write('╔═════════╦═══════════════╦═══════════════╦═══════════════╗\n')
+            f.write('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║\n')
+            f.write('╠═════════╬═══════════════╬═══════════════╬═══════════════╣\n')
+            f.write('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
+                   (train_score['acc'], train_score['miou'], train_score['mf1']))
+            f.write('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
+                   (score['acc'], score['miou'], score['mf1']))
+            f.write('╚═════════╩═══════════════╩═══════════════╩═══════════════╝\n')
+
+            # 分别记录详细指标
+            f.write('训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in train_score.items()})
+            f.write('验证详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in score.items()})
+            f.write('='*100 + '\n\n')
+
+        # 美化控制台输出
+        print('='*100)
+        # 合并展示训练和验证结果
+        print('【Epoch: %d】训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)' %
+             (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+
+        # 对比展示关键指标 - 使用固定宽度确保对齐
+        print('╔═════════╦═══════════════╦═══════════════╦═══════════════╗')
+        print('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║')
+        print('╠═════════╬═══════════════╬═══════════════╬═══════════════╣')
+        print('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+             (train_score['acc'], train_score['miou'], train_score['mf1']))
+        print('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+             (score['acc'], score['miou'], score['mf1']))
+        print('╚═════════╩═══════════════╩═══════════════╩═══════════════╝')
+
+        # 如果验证集IoU优于之前最佳值，显示提示
+        if score['iou_1'] > best_iou - 0.0001:  # 考虑浮点精度
+            print('🌟 本轮验证IoU创建新高！')
+
         print('训练轮次 %d / %d 结束 \t 耗时: %d 秒' % (epoch, opt.n_epochs, time.time() - epoch_start_time))
 
         # 在每个epoch结束时更新学习率
