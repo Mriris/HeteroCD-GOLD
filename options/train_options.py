@@ -10,13 +10,13 @@ class TrainOptions():
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split5',
+        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='hetegan_base',
+        parser.add_argument('--name', type=str, default='hetegan_test',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='0',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
-        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints4', help='模型保存路径')
+        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints7', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
                             help='网络初始化方式 [normal | xavier | kaiming | orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02,
