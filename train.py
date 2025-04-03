@@ -242,20 +242,20 @@ if __name__ == '__main__':
             f.write('【Epoch: %d】训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
                    (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
 
-            # 对比展示关键指标 - 使用固定宽度确保对齐
-            f.write('╔═════════╦═══════════════╦═══════════════╦═══════════════╗\n')
-            f.write('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║\n')
-            f.write('╠═════════╬═══════════════╬═══════════════╬═══════════════╣\n')
-            f.write('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
-                   (train_score['acc'], train_score['miou'], train_score['mf1']))
-            f.write('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
-                   (score['acc'], score['miou'], score['mf1']))
-            f.write('╚═════════╩═══════════════╩═══════════════╩═══════════════╝\n')
+            # # 对比展示关键指标 - 使用固定宽度确保对齐
+            # f.write('╔═════════╦═══════════════╦═══════════════╦═══════════════╗\n')
+            # f.write('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║\n')
+            # f.write('╠═════════╬═══════════════╬═══════════════╬═══════════════╣\n')
+            # f.write('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
+            #        (train_score['acc'], train_score['miou'], train_score['mf1']))
+            # f.write('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
+            #        (score['acc'], score['miou'], score['mf1']))
+            # f.write('╚═════════╩═══════════════╩═══════════════╩═══════════════╝\n')
 
             # 分别记录详细指标
             f.write('训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in train_score.items()})
             f.write('验证详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in score.items()})
-            f.write('='*100 + '\n\n')
+            # f.write('='*100 + '\n\n')
 
         # 美化控制台输出
         print('='*100)
