@@ -97,9 +97,47 @@ class BaseModel(ABC):
         """
         if self.isTrain:
             self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
+        
+        # 当继续训练时，加载保存的模型
         if not self.isTrain or opt.continue_train:
-            load_suffix = 'iter_%d' % opt.load_iter if opt.load_iter > 0 else opt.epoch
-            self.load_networks(load_suffix)
+            # 确定要加载的模型文件
+            if opt.continue_train and hasattr(opt, 'epoch') and opt.epoch != 'latest':
+                # 使用指定的epoch
+                load_suffix = opt.epoch
+                if isinstance(load_suffix, str) and not load_suffix.endswith('.pth'):
+                    print(f"断点续训：尝试加载epoch {load_suffix}的模型")
+                else:
+                    print(f"断点续训：尝试加载指定的模型文件 {load_suffix}")
+            else:
+                # 默认使用最新的epoch或指定的迭代
+                load_suffix = 'iter_%d' % opt.load_iter if opt.load_iter > 0 else opt.epoch
+                print(f"尝试加载模型：{load_suffix}")
+            
+            # 设置加载错误后的回退策略
+            try:
+                # 先尝试加载指定的模型
+                self.load_networks(load_suffix)
+            except Exception as e:
+                # 如果加载失败，尝试回退到其他模型
+                print(f"加载指定模型失败: {e}")
+                
+                # 如果是继续训练，优先回退到best或latest模型
+                if opt.continue_train:
+                    try:
+                        print("尝试加载最佳模型...")
+                        self.load_networks('best')
+                    except Exception as e2:
+                        print(f"加载最佳模型失败: {e2}")
+                        try:
+                            print("尝试加载最新模型...")
+                            self.load_networks('latest')
+                        except Exception as e3:
+                            print(f"加载最新模型也失败: {e3}")
+                            print("警告：无法加载任何模型，将使用初始化的权重")
+                else:
+                    print("非断点续训模式，将使用初始化的权重")
+        
+        # 打印网络结构
         self.print_networks(opt.verbose)
 
     def parallelize(self):
@@ -213,19 +251,61 @@ class BaseModel(ABC):
             if isinstance(name, str):
                 load_filename = '%s_net_%s.pth' % (epoch, name)
                 load_path = os.path.join(self.save_dir, load_filename)
+                
+                # 检查文件是否存在，如果不存在则给出警告
+                if not os.path.exists(load_path):
+                    print(f"警告: 模型文件 {load_path} 不存在！")
+                    
+                    # 如果是latest，尝试寻找最新的模型文件
+                    if epoch == 'latest' or epoch == 'best':
+                        print(f"尝试寻找可用的模型文件...")
+                        # 收集所有适用的模型文件
+                        model_files = [f for f in os.listdir(self.save_dir) 
+                                       if f.endswith(f'_net_{name}.pth')]
+                        
+                        if model_files:
+                            # 如果文件名形式为"数字_net_XX.pth"，则按数字排序，取最大的
+                            model_files.sort(key=lambda x: int(x.split('_')[0]) 
+                                            if x.split('_')[0].isdigit() else -1, 
+                                            reverse=True)
+                            
+                            load_filename = model_files[0]
+                            load_path = os.path.join(self.save_dir, load_filename)
+                            print(f"找到模型文件: {load_path}")
+                        else:
+                            print(f"未找到任何可用的模型文件！")
+                            continue
+                    else:
+                        # 如果是特定epoch且不存在，则继续下一个模型
+                        continue
+                
                 net = getattr(self, 'net' + name)
                 if isinstance(net, torch.nn.DataParallel):
                     net = net.module
                 print('从%s加载网络' % load_path)
-                # 如果使用PyTorch > 1.0.0
-                state_dict = torch.load(load_path, map_location=str(self.device))
-                if hasattr(state_dict, '_metadata'):
-                    del state_dict._metadata
+                
+                try:
+                    # 加载模型，处理可能的设备不匹配
+                    state_dict = torch.load(load_path, map_location=str(self.device))
+                    
+                    if hasattr(state_dict, '_metadata'):
+                        del state_dict._metadata
 
-                # 补丁InstanceNorm checkpoints 适用于多GPU训练
-                for key in list(state_dict.keys()):  # 需要转换成列表，因为我们可能会在循环中添加或删除键
-                    self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
-                net.load_state_dict(state_dict)
+                    # 尝试移除可能存在的"module."前缀
+                    new_state_dict = OrderedDict()
+                    for k, v in state_dict.items():
+                        if k.startswith('module.'):
+                            new_key = k[7:]  # 移除 'module.' 前缀
+                        else:
+                            new_key = k
+                        new_state_dict[new_key] = v
+                    
+                    # 加载状态字典
+                    net.load_state_dict(new_state_dict)
+                    print(f"成功加载模型 {name}")
+                except Exception as e:
+                    print(f"加载模型时出错: {e}")
+                    print(f"尝试继续处理...")
 
     def print_networks(self, verbose):
         """打印网络的总参数数量

@@ -12,11 +12,11 @@ class TrainOptions():
         # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='hetegan_test',
+        parser.add_argument('--name', type=str, default='muagan_test',
                             help='实验名称。决定了在哪里存储样本和模型')
-        parser.add_argument('--gpu_ids', type=str, default='0',
+        parser.add_argument('--gpu_ids', type=str, default='1,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
-        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints7', help='模型保存路径')
+        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints8', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
                             help='网络初始化方式 [normal | xavier | kaiming | orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02,
@@ -36,16 +36,23 @@ class TrainOptions():
         # 训练参数
         parser.add_argument('--load_size', type=int, default=512, help='将图像缩放到此大小')
         parser.add_argument('--crop_size', type=int, default=512, help='然后裁剪到此大小')
-        parser.add_argument('--n_epochs', type=int, default=200, help='使用初始学习率的epoch数量')
+        parser.add_argument('--n_epochs', type=int, default=400, help='使用初始学习率的epoch数量')
         parser.add_argument('--beta1', type=float, default=0.5, help='adam的动量项')
         parser.add_argument('--lr', type=float, default=0.0005, help='adam的初始学习率')
         parser.add_argument('--lr_policy', type=str, default='cosine',
                             help='学习率策略。[linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50,
                             help='每lr_decay_iters次迭代乘以一个gamma')
-        parser.add_argument('--batch_size', type=int, default=8, help='输入批量大小')
+        parser.add_argument('--batch_size', type=int, default=4, help='输入批量大小')
         parser.add_argument('--num_workers', type=int, default=8, help='数据加载器的工作线程数')
         parser.add_argument('--seed', type=int, default=666, help='随机种子')
+        
+        # 蒸馏学习参数
+        parser.add_argument('--use_distill', action='store_true', default=True, help='是否使用蒸馏学习')
+        parser.add_argument('--distill_temp', type=float, default=2.0, help='蒸馏学习的温度参数')
+        parser.add_argument('--distill_alpha', type=float, default=0.5, help='特征蒸馏损失权重')
+        parser.add_argument('--distill_beta', type=float, default=0.5, help='输出蒸馏损失权重')
+        
         self.isTrain = True
         return parser
 

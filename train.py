@@ -43,16 +43,96 @@ if __name__ == '__main__':
     # 设置随机数种子
     setup_seed(opt.seed)
     
-    # 使用opt中的配置加载数据集
-    train_set_change = dataset.Data('train', root=opt.dataroot, opt=opt)
+    # 使用opt中的配置加载数据集，设置load_t2_opt=True来加载时间点2的光学图像
+    train_set_change = dataset.Data('train', root=opt.dataroot, opt=opt, load_t2_opt=True)
     train_loader_change = DataLoader(train_set_change, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=True,
                                      drop_last=True)
     dataset_size = len(train_loader_change)
-    val_set = dataset.Data('val', root=opt.dataroot)
+    
+    # 加载验证集，同样加载时间点2的光学图像
+    val_set = dataset.Data('val', root=opt.dataroot, load_t2_opt=True)
     val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=False, drop_last=True)
+    
+    # 创建模型，设置use_distill=True启用蒸馏学习
+    opt.use_distill = True  # 启用蒸馏学习
     model = Pix2PixModel(opt, is_train=True)
+    
+    # 添加断点续训功能：恢复之前的训练状态
+    resume_epoch = 0
+    best_iou = 0
+    
+    if opt.continue_train:
+        # 读取之前的训练记录
+        training_info_path = os.path.join(opt.checkpoints_dir, opt.name, "training_info.txt")
+        
+        # 检查是否存在训练信息文件
+        if os.path.exists(training_info_path):
+            with open(training_info_path, 'r') as f:
+                lines = f.readlines()
+                training_info = {}
+                
+                # 解析训练信息文件中的所有键值对
+                for line in lines:
+                    if ':' in line:
+                        key, value = line.strip().split(':', 1)
+                        training_info[key] = value
+                
+                try:
+                    # 获取下一个要训练的epoch
+                    if 'next_epoch' in training_info:
+                        resume_epoch = int(training_info['next_epoch'])
+                    elif 'current_epoch' in training_info:
+                        # 如果没有next_epoch，则从current_epoch + 1开始
+                        resume_epoch = int(training_info['current_epoch']) + 1
+                    
+                    # 获取历史最佳IoU
+                    if 'best_iou' in training_info:
+                        best_iou = float(training_info['best_iou'])
+                    
+                    print(f"断点续训：从轮次 {resume_epoch} 继续训练，历史最佳IoU: {best_iou:.4f}")
+                    
+                    # 确定要加载的模型文件
+                    # 优先使用指定的latest_model
+                    if 'latest_model' in training_info:
+                        opt.epoch = training_info['latest_model'].replace('_net_CD.pth', '')
+                        print(f"将加载最新模型：{opt.epoch}")
+                    else:
+                        # 否则使用current_epoch作为加载点
+                        if 'current_epoch' in training_info:
+                            opt.epoch = training_info['current_epoch']
+                            print(f"将加载指定epoch模型：{opt.epoch}")
+                        else:
+                            # 没有明确指定，则寻找最新的模型
+                            opt.epoch = 'latest'
+                            print("将尝试加载最新模型")
+                except Exception as e:
+                    print(f"解析训练信息文件出错: {e}")
+                    print("训练信息文件格式错误，将从头开始训练")
+                    resume_epoch = 0
+                    best_iou = 0
+                    opt.epoch = 'latest'
+        else:
+            print("未找到训练信息文件，将从头开始训练")
+    
+    # 设置模型，这将加载保存的模型权重（如果存在）
     model.setup(opt)
     visualizer = Visualizer(opt)
+    
+    # 如果是断点续训，输出确认信息
+    if opt.continue_train and resume_epoch > 0:
+        print(f"模型已从{opt.epoch}加载，将从epoch {resume_epoch}继续训练")
+        # 检查模型是否正确加载
+        param_sum = sum(p.sum().item() for p in model.netCD.parameters() if p.requires_grad)
+        print(f"模型参数总和: {param_sum:.4f} - {'正常' if abs(param_sum) > 0.1 else '警告: 可能未正确加载'}")
+        
+        # 如果模型参数异常，给出更详细的警告
+        if abs(param_sum) <= 0.1:
+            print("警告：模型参数总和接近零，这可能表明模型未正确加载！")
+            print("请检查模型文件路径和权重是否正确。")
+            response = input("模型参数可能有问题，是否继续训练？(y/n): ")
+            if response.lower() != 'y':
+                print("训练已取消")
+                exit(0)
     
     # 创建TensorBoard摘要写入器
     log_dir = os.path.join(opt.checkpoints_dir, opt.name, 'tensorboard_logs')
@@ -72,36 +152,15 @@ if __name__ == '__main__':
             f.write(f"HeteGAN 训练日志 - 开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"数据集: {opt.dataroot}\n")
             f.write(f"批次大小: {opt.batch_size}, 学习率: {opt.lr}, GPU: {opt.gpu_ids}\n")
+            f.write(f"是否使用蒸馏学习: {'是' if opt.use_distill else '否'}\n")
             f.write("─" * 50 + "\n")
 
     total_iters = 0
-    resume_epoch = 0
-    best_iou = 0
     
-    # 添加断点续训功能：恢复之前的训练状态
-    if opt.continue_train:
-        # 读取之前的训练记录
-        training_info_path = os.path.join(opt.checkpoints_dir, opt.name, "training_info.txt")
-        
-        # 检查是否存在训练信息文件
-        if os.path.exists(training_info_path):
-            with open(training_info_path, 'r') as f:
-                lines = f.readlines()
-                if len(lines) >= 2:
-                    try:
-                        resume_epoch = int(lines[0].strip().split(':')[1])
-                        best_iou = float(lines[1].strip().split(':')[1])
-                        print(f"断点续训：从轮次 {resume_epoch} 继续训练，历史最佳IoU: {best_iou:.4f}")
-                        
-                        # 记录续训信息到日志文件
-                        with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
-                            f.write('─' * 50 + f'\n断点续训：从轮次 {resume_epoch} 继续训练，历史最佳IoU: {best_iou:.4f}\n' + '─' * 50 + '\n')
-                    except:
-                        print("训练信息文件格式错误，将从头开始训练")
-                        resume_epoch = 0
-                        best_iou = 0
-        else:
-            print("未找到训练信息文件，将从头开始训练")
+    # 如果是继续训练，记录续训信息到日志文件
+    if opt.continue_train and resume_epoch > 0:
+        with open(log_path, 'a') as f:
+            f.write('─' * 50 + f'\n断点续训：从轮次 {resume_epoch} 继续训练，历史最佳IoU: {best_iou:.4f}\n' + '─' * 50 + '\n')
 
     for epoch in range(resume_epoch,
                        opt.n_epochs):  # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
@@ -115,27 +174,49 @@ if __name__ == '__main__':
         print(f'开始训练第 {epoch}/{opt.n_epochs - 1} 轮 | 批次大小: {opt.batch_size} | 学习率: {opt.lr}')
         print('=' * 80)
         
+        # 学生网络的预测结果和标签
         preds_all = []
         labels_all = []
         names_all = []
+        
+        # 教师网络的预测结果和标签
+        teacher_preds_all = []
+        teacher_labels_all = []
+        
         for i, data in enumerate(train_loader_change):
             iter_start_time = time.time()  # timer for computation per iteration
             if total_iters % opt.print_freq == 0:
                 t_data = iter_start_time - iter_data_time
             total_iters += opt.batch_size
             epoch_iter += opt.batch_size
-            model.set_input(data[0], data[1], data[2], data[3],
-                            opt.gpu_ids[0])  # unpack data from dataset and apply preprocessing
+            
+            # 设置模型输入，现在包括时间点2的光学图像
+            if len(data) == 5:  # 带时间点2的光学图像的情况
+                model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0], data[4])
+            else:  # 不带时间点2的光学图像的情况
+                model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0])
 
-            out_change = model.optimize_parameters(
-                epoch)  # calculate loss functions, get gradients, update network weights
+            # 优化模型参数
+            out_change = model.optimize_parameters(epoch)  # calculate loss functions, get gradients, update network weights
             out_change = FF.interpolate(out_change, size=(512, 512), mode='bilinear', align_corners=True)
+            
+            # 记录学生网络的预测结果
             preds = torch.argmax(out_change, dim=1)
             pred_numpy = preds.cpu().numpy()
             labels_numpy = data[2].cpu().numpy()
             preds_all.append(pred_numpy)
             labels_all.append(labels_numpy)
             names_all.extend(data[3])
+            
+            # 如果使用蒸馏学习且有第三张图，也记录教师网络的预测结果
+            if opt.use_distill and len(data) == 5:
+                teacher_pred, _ = model.get_teacher_pred()
+                if teacher_pred is not None:
+                    teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
+                    teacher_preds = torch.argmax(teacher_pred, dim=1)
+                    teacher_pred_numpy = teacher_preds.cpu().numpy()
+                    teacher_preds_all.append(teacher_pred_numpy)
+                    teacher_labels_all.append(labels_numpy)  # 标签是相同的
 
             if total_iters % opt.print_freq == 0:  # print training losses and save logging information to the disk
                 losses = model.get_current_losses()
@@ -146,42 +227,77 @@ if __name__ == '__main__':
                 print(f'(轮次: {epoch}, 批次: {i}, 用时: {t_comp:.3f}秒/样本, 数据加载: {t_data:.3f}秒) {loss_str}')
 
             iter_data_time = time.time()
+            
+        # 评估学生网络在训练集上的性能
         preds_all = np.concatenate(preds_all, axis=0)
         labels_all = np.concatenate(labels_all, axis=0)
         hist = get_confuse_matrix(2, labels_all, preds_all)
         score = cm2score(hist)
         
         # 记录训练指标到TensorBoard
-        writer.add_scalar('Train/Accuracy', score['acc'], epoch)
-        writer.add_scalar('Train/MeanIoU', score['miou'], epoch)
-        writer.add_scalar('Train/IoU_0', score['iou_0'], epoch)
-        writer.add_scalar('Train/IoU_1', score['iou_1'], epoch)
-        writer.add_scalar('Train/F1_0', score['F1_0'], epoch)
-        writer.add_scalar('Train/F1_1', score['F1_1'], epoch)
+        writer.add_scalar('Train/Student/Accuracy', score['acc'], epoch)
+        writer.add_scalar('Train/Student/MeanIoU', score['miou'], epoch)
+        writer.add_scalar('Train/Student/IoU_0', score['iou_0'], epoch)
+        writer.add_scalar('Train/Student/IoU_1', score['iou_1'], epoch)
+        writer.add_scalar('Train/Student/F1_0', score['F1_0'], epoch)
+        writer.add_scalar('Train/Student/F1_1', score['F1_1'], epoch)
         
         # 记录训练损失
         for loss_name, loss_value in model.get_current_losses().items():
             writer.add_scalar(f'Train/Loss_{loss_name}', loss_value, epoch)
             
-        print('训练轮次: %d 评分: %s' % (epoch, {key: score[key] for key in score}))
-
+        print('学生网络训练评分: %s' % {key: score[key] for key in score})
+        
         # 记录训练结果
         train_score = score
         train_iou = score['iou_1']  # 保存训练集上的iou_1
+        
+        # 记录教师网络在训练集上的性能（如果有）
+        teacher_score = None
+        if opt.use_distill and len(teacher_preds_all) > 0:
+            teacher_preds_all = np.concatenate(teacher_preds_all, axis=0)
+            teacher_labels_all = np.concatenate(teacher_labels_all, axis=0)
+            hist = get_confuse_matrix(2, teacher_labels_all, teacher_preds_all)
+            teacher_score = cm2score(hist)
+            
+            # 记录教师网络训练指标到TensorBoard
+            writer.add_scalar('Train/Teacher/Accuracy', teacher_score['acc'], epoch)
+            writer.add_scalar('Train/Teacher/MeanIoU', teacher_score['miou'], epoch)
+            writer.add_scalar('Train/Teacher/IoU_0', teacher_score['iou_0'], epoch)
+            writer.add_scalar('Train/Teacher/IoU_1', teacher_score['iou_1'], epoch)
+            writer.add_scalar('Train/Teacher/F1_0', teacher_score['F1_0'], epoch)
+            writer.add_scalar('Train/Teacher/F1_1', teacher_score['F1_1'], epoch)
+            
+            print('教师网络训练评分: %s' % {key: teacher_score[key] for key in teacher_score})
 
         # 获取训练损失
         train_losses = model.get_current_losses()
         train_loss = sum(train_losses.values()) if train_losses else 0
 
+        # 创建保存预测结果的目录
         best_preds_dir = os.path.join(opt.checkpoints_dir, opt.name, "results")
         if not os.path.exists(best_preds_dir):
             os.makedirs(best_preds_dir)
+            
+        # 验证集评估
         val_loss = AverageMeter()
         preds_all_val = []
         labels_all_val = []
         names_all_val = []
+        
+        # 教师网络的验证集预测
+        teacher_preds_all_val = []
+        teacher_labels_all_val = []
+        teacher_val_loss = AverageMeter()
+        
         for i, data in enumerate(val_loader):
-            model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0])
+            # 设置模型输入，现在包括时间点2的光学图像
+            if len(data) == 5:  # 带时间点2的光学图像的情况
+                model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0], data[4])
+            else:  # 不带时间点2的光学图像的情况
+                model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0])
+                
+            # 获取学生网络预测结果
             out_change, loss = model.get_val_pred()
             out_change = FF.interpolate(out_change, size=(512, 512), mode='bilinear', align_corners=True)
             val_loss.update(loss.cpu().detach().numpy())
@@ -191,87 +307,173 @@ if __name__ == '__main__':
             preds_all_val.append(pred_numpy)
             labels_all_val.append(labels_numpy)
             names_all_val.extend(data[3])
+            
+            # 如果使用蒸馏学习且有第三张图像，获取教师网络预测结果
+            if opt.use_distill and len(data) == 5:
+                teacher_pred, teacher_loss = model.get_teacher_pred()
+                if teacher_pred is not None:
+                    teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
+                    teacher_val_loss.update(teacher_loss.cpu().detach().numpy())
+                    teacher_preds = torch.argmax(teacher_pred, dim=1)
+                    teacher_pred_numpy = teacher_preds.cpu().numpy()
+                    teacher_preds_all_val.append(teacher_pred_numpy)
+                    teacher_labels_all_val.append(labels_numpy)  # 标签是相同的
+        
+        # 评估学生网络在验证集上的性能
         preds_all_val = np.concatenate(preds_all_val, axis=0)
         labels_all_val = np.concatenate(labels_all_val, axis=0)
         hist = get_confuse_matrix(2, labels_all_val, preds_all_val)
         score = cm2score(hist)
         
         # 记录验证指标到TensorBoard
-        writer.add_scalar('Validation/Accuracy', score['acc'], epoch)
-        writer.add_scalar('Validation/MeanIoU', score['miou'], epoch)
-        writer.add_scalar('Validation/IoU_0', score['iou_0'], epoch)
-        writer.add_scalar('Validation/IoU_1', score['iou_1'], epoch)
-        writer.add_scalar('Validation/F1_0', score['F1_0'], epoch)
-        writer.add_scalar('Validation/F1_1', score['F1_1'], epoch)
-        writer.add_scalar('Validation/Loss', val_loss.average(), epoch)
+        writer.add_scalar('Validation/Student/Accuracy', score['acc'], epoch)
+        writer.add_scalar('Validation/Student/MeanIoU', score['miou'], epoch)
+        writer.add_scalar('Validation/Student/IoU_0', score['iou_0'], epoch)
+        writer.add_scalar('Validation/Student/IoU_1', score['iou_1'], epoch)
+        writer.add_scalar('Validation/Student/F1_0', score['F1_0'], epoch)
+        writer.add_scalar('Validation/Student/F1_1', score['F1_1'], epoch)
+        writer.add_scalar('Validation/Student/Loss', val_loss.average(), epoch)
         
         # 记录验证集上的IoU，用于评估模型性能
         val_iou = score['iou_1']
         
-        # 保存当前模型
-        model.save_networks(epoch)
+        # 评估教师网络在验证集上的性能（如果有）
+        teacher_val_score = None
+        if opt.use_distill and len(teacher_preds_all_val) > 0:
+            teacher_preds_all_val = np.concatenate(teacher_preds_all_val, axis=0)
+            teacher_labels_all_val = np.concatenate(teacher_labels_all_val, axis=0)
+            hist = get_confuse_matrix(2, teacher_labels_all_val, teacher_preds_all_val)
+            teacher_val_score = cm2score(hist)
+            
+            # 记录教师网络验证指标到TensorBoard
+            writer.add_scalar('Validation/Teacher/Accuracy', teacher_val_score['acc'], epoch)
+            writer.add_scalar('Validation/Teacher/MeanIoU', teacher_val_score['miou'], epoch)
+            writer.add_scalar('Validation/Teacher/IoU_0', teacher_val_score['iou_0'], epoch)
+            writer.add_scalar('Validation/Teacher/IoU_1', teacher_val_score['iou_1'], epoch)
+            writer.add_scalar('Validation/Teacher/F1_0', teacher_val_score['F1_0'], epoch)
+            writer.add_scalar('Validation/Teacher/F1_1', teacher_val_score['F1_1'], epoch)
+            writer.add_scalar('Validation/Teacher/Loss', teacher_val_loss.average(), epoch)
+            
+            print('教师网络验证评分: %s' % {key: teacher_val_score[key] for key in teacher_val_score})
         
+        # 保存模型前清理旧的非最佳模型文件，只保留最新和最好的
+        model_dir = os.path.join(opt.checkpoints_dir, opt.name)
+        # 找出当前目录下所有模型文件
+        model_files = [f for f in os.listdir(model_dir) 
+                      if f.endswith('_net_CD.pth') and not f.startswith('best')]
+        # 按照epoch编号排序
+        if len(model_files) > 1:  # 如果有多个非最佳模型文件
+            # 排序模型文件，保留最新的，删除其他的
+            model_files.sort(key=lambda x: int(x.split('_')[0]) if x.split('_')[0].isdigit() else -1, reverse=True)
+            latest_model = model_files[0]  # 保留最新的模型
+            for model_file in model_files[1:]:  # 删除其他旧模型
+                try:
+                    os.remove(os.path.join(model_dir, model_file))
+                    print(f"已删除旧模型文件: {model_file}")
+                except Exception as e:
+                    print(f"删除文件 {model_file} 时出错: {e}")
+
+        # 保存当前模型作为最新模型
+        model.save_networks(epoch)
+        print(f"已保存最新模型: {epoch}_net_CD.pth")
+        latest_model_file = f"{epoch}_net_CD.pth"
+        
+        # 是否需要保存最佳模型
+        best_model_updated = False
         if val_iou > best_iou:
             with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
                 f.write(f'新纪录！保存模型至: {os.path.join(opt.checkpoints_dir, opt.name)}\n')
+            
             # 查找并删除之前的最佳模型文件
-            for file in os.listdir(os.path.join(opt.checkpoints_dir, opt.name)):
+            for file in os.listdir(model_dir):
                 if file.endswith('.pth') and file.startswith('best_net'):
-                    os.remove(os.path.join(opt.checkpoints_dir, opt.name, file))
+                    try:
+                        os.remove(os.path.join(model_dir, file))
+                        print(f"已删除旧的最佳模型: {file}")
+                    except Exception as e:
+                        print(f"删除文件 {file} 时出错: {e}")
             
             # 保存新的最佳模型
             model.save_networks('best')
             best_iou = val_iou
+            best_epoch = epoch  # 记录产生最佳结果的epoch
+            best_model_file = f"best_net_CD.pth"
+            best_model_updated = True
             
             # 保存最佳结果预测图
             for i in range(len(names_all_val)):
                 save_path = os.path.join(best_preds_dir, names_all_val[i])
                 cv2.imwrite(save_path, preds_all_val[i] * 255)
             
-            print('更新最佳IoU模型')
+            print('🌟 更新最佳IoU模型 🌟')
         
-        # 更新训练信息文件
+        # 更新训练信息文件，确保信息完整
         with open(os.path.join(opt.checkpoints_dir, opt.name, "training_info.txt"), 'w') as f:
-            f.write(f"epoch:{epoch + 1}\n")  # 保存下一轮次，以便断点续训
+            # 下一个要训练的epoch
+            next_epoch = epoch + 1
+            f.write(f"next_epoch:{next_epoch}\n")
+            # 当前已完成的epoch
+            f.write(f"current_epoch:{epoch}\n")
+            # 最佳性能及对应epoch
             f.write(f"best_iou:{best_iou}\n")
+            if 'best_epoch' in locals():
+                f.write(f"best_epoch:{best_epoch}\n")
+            # 最新模型文件名
+            f.write(f"latest_model:{latest_model_file}\n")
+            # 最佳模型文件名
+            f.write(f"best_model:best_net_CD.pth\n")
+            # 记录最后一次更新最佳模型的轮次
+            if best_model_updated:
+                f.write(f"best_model_updated_at:{epoch}\n")
             
         with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
             # 添加分隔行
-            f.write('='*100 + '\n')
+            f.write('='*100 + '\n【Epoch: %d】\n' % epoch)
             # 合并展示训练和验证结果
-            f.write('【Epoch: %d】训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
-                   (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
-
-            # # 对比展示关键指标 - 使用固定宽度确保对齐
-            # f.write('╔═════════╦═══════════════╦═══════════════╦═══════════════╗\n')
-            # f.write('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║\n')
-            # f.write('╠═════════╬═══════════════╬═══════════════╬═══════════════╣\n')
-            # f.write('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
-            #        (train_score['acc'], train_score['miou'], train_score['mf1']))
-            # f.write('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║\n' %
-            #        (score['acc'], score['miou'], score['mf1']))
-            # f.write('╚═════════╩═══════════════╩═══════════════╩═══════════════╝\n')
+            f.write('【学生网络】 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
+                   (train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+                   
+            # 如果有教师网络，记录教师网络结果
+            if teacher_score is not None and teacher_val_score is not None:
+                f.write('【教师网络】 - 训练IoU: %.4f | 验证IoU: %.4f (Loss: %.4f)\n' %
+                       (teacher_score['iou_1'], teacher_val_score['iou_1'], teacher_val_loss.average()))
 
             # 分别记录详细指标
-            f.write('训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in train_score.items()})
-            f.write('验证详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in score.items()})
-            # f.write('='*100 + '\n\n')
+            f.write('学生网络训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in train_score.items()})
+            f.write('学生网络验证详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in score.items()})
+            
+            # 如果有教师网络，记录教师网络详细指标
+            if teacher_score is not None and teacher_val_score is not None:
+                f.write('教师网络训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in teacher_score.items()})
+                f.write('教师网络验证详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in teacher_val_score.items()})
 
         # 美化控制台输出
         print('='*100)
         # 合并展示训练和验证结果
-        print('【Epoch: %d】训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)' %
+        print('【Epoch: %d】学生网络 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)' %
              (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+             
+        # 如果有教师网络，打印教师网络结果
+        if teacher_score is not None and teacher_val_score is not None:
+            print('【Epoch: %d】教师网络 - 训练IoU: %.4f | 验证IoU: %.4f (Loss: %.4f)' %
+                 (epoch, teacher_score['iou_1'], teacher_val_score['iou_1'], teacher_val_loss.average()))
 
         # 对比展示关键指标 - 使用固定宽度确保对齐
-        print('╔═════════╦═══════════════╦═══════════════╦═══════════════╗')
-        print('║ 指标对比 ║     准确率     ║    平均IoU     ║    平均F1      ║')
-        print('╠═════════╬═══════════════╬═══════════════╬═══════════════╣')
-        print('║  训练集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+        print('╔═════════╦════════════╦═══════════════╦═══════════════╦═══════════════╗')
+        print('║ 网络类型 ║    节点    ║     准确率     ║    平均IoU     ║    平均F1      ║')
+        print('╠═════════╬════════════╬═══════════════╬═══════════════╬═══════════════╣')
+        print('║  学生网络 ║   训练集   ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
              (train_score['acc'], train_score['miou'], train_score['mf1']))
-        print('║  验证集  ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+        print('║  学生网络 ║   验证集   ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
              (score['acc'], score['miou'], score['mf1']))
-        print('╚═════════╩═══════════════╩═══════════════╩═══════════════╝')
+             
+        # 如果有教师网络，打印教师网络对比
+        if teacher_score is not None and teacher_val_score is not None:
+            print('║  教师网络 ║   训练集   ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+                 (teacher_score['acc'], teacher_score['miou'], teacher_score['mf1']))
+            print('║  教师网络 ║   验证集   ║     %-7.4f   ║     %-7.4f   ║     %-7.4f   ║' %
+                 (teacher_val_score['acc'], teacher_val_score['miou'], teacher_val_score['mf1']))
+        print('╚═════════╩════════════╩═══════════════╩═══════════════╩═══════════════╝')
 
         # 如果验证集IoU优于之前最佳值，显示提示
         if score['iou_1'] >= best_iou - 0.0001:  # 考虑浮点精度

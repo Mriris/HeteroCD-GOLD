@@ -217,7 +217,7 @@ def normalize_image(im, time='A'):
     return im
 
 
-def read_RSimages(mode, rescale=False, root=None, opt=None):
+def read_RSimages(mode, rescale=False, root=None, opt=None, load_t2_opt=False):
     if root is None and opt is not None:
         root = opt.dataroot  # 从 opt 中获取 dataroot
     if root is None:
@@ -231,15 +231,32 @@ def read_RSimages(mode, rescale=False, root=None, opt=None):
     img_A_dir = os.path.join(root, mode, 'A')
     img_B_dir = os.path.join(root, mode, 'B')
     label_A_dir = os.path.join(root, mode, 'label')
+    
+    # 如果需要加载时间点2的光学图像，也读取C文件夹
+    if load_t2_opt:
+        img_C_dir = os.path.join(root, mode, 'C')
+        if not os.path.exists(img_C_dir):
+            print(f"警告：未找到时间点2的光学图像文件夹({img_C_dir})，将尝试使用A文件夹作为替代")
+            img_C_dir = img_A_dir  # 如果C文件夹不存在，使用A文件夹作为替代
+    
     data_list = os.listdir(img_A_dir)
     imgs_list_A, imgs_list_B, labels_A = [], [], []
+    imgs_list_C = [] if load_t2_opt else None
+    
     count = 0
     for it in data_list:
         img_A_path = os.path.join(img_A_dir, it)
         img_B_path = os.path.join(img_B_dir, it)
         label_A_path = os.path.join(label_A_dir, it)
+        
         imgs_list_A.append(img_A_path)
         imgs_list_B.append(img_B_path)
+        
+        # 如果需要加载时间点2的光学图像
+        if load_t2_opt:
+            img_C_path = os.path.join(img_C_dir, it)
+            imgs_list_C.append(img_C_path)
+        
         label_A = io.imread(label_A_path)
         labels_A.append(label_A)
         count += 1
@@ -254,7 +271,10 @@ def read_RSimages(mode, rescale=False, root=None, opt=None):
 
     print('已加载 ' + str(len(imgs_list_A)) + ' 张' + mode_name + '图像')
 
-    return imgs_list_A, imgs_list_B, labels_A
+    if load_t2_opt:
+        return imgs_list_A, imgs_list_B, labels_A, imgs_list_C
+    else:
+        return imgs_list_A, imgs_list_B, labels_A
 
 
 def __transforms2pil_resize(method):
@@ -339,13 +359,24 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
 
 
 class Data(data.Dataset):
-    def __init__(self, mode, random_flip=False, root=None, opt=None):
+    def __init__(self, mode, random_flip=False, root=None, opt=None, load_t2_opt=False):
         if root is None and opt is not None:
             root = opt.dataroot  # 从 opt 中获取 dataroot
         if root is None:
             raise ValueError("root 参数未指定，请通过 opt.dataroot 或直接设置 root 提供数据路径")
         self.random_flip = random_flip
-        self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(mode, root=root, opt=opt)
+        self.load_t2_opt = load_t2_opt
+        
+        # 根据需要是否加载时间点2的光学图像
+        if load_t2_opt:
+            self.imgs_list_A, self.imgs_list_B, self.labels, self.imgs_list_C = read_RSimages(
+                mode, root=root, opt=opt, load_t2_opt=True
+            )
+        else:
+            self.imgs_list_A, self.imgs_list_B, self.labels = read_RSimages(
+                mode, root=root, opt=opt, load_t2_opt=False
+            )
+            
         self.mode = mode
         self.augm = CDDataAugmentation(
             img_size=512,
@@ -364,16 +395,34 @@ class Data(data.Dataset):
         img_A = io.imread(self.imgs_list_A[idx])
         name = self.imgs_list_A[idx].split('/')[-1].replace('.tif', '.png')
         img_B = io.imread(self.imgs_list_B[idx])
+        
+        # 如果需要加载时间点2的光学图像
+        if self.load_t2_opt:
+            img_C = io.imread(self.imgs_list_C[idx])
+        
         transform_list = [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         self.img_transform = transforms.Compose(transform_list)
         label = self.labels[idx] // 255
+        
+        # 数据增强处理，确保所有图像采用相同的转换
         if self.mode == "train":
-            [img_A, img_B], [label] = self.augm.transform([img_A, img_B], [label])
+            if self.load_t2_opt:
+                [img_A, img_B, img_C], [label] = self.augm.transform([img_A, img_B, img_C], [label])
+            else:
+                [img_A, img_B], [label] = self.augm.transform([img_A, img_B], [label])
+        
+        # 转换为张量
         img_A = self.img_transform(img_A)
         img_B = self.img_transform(img_B)
+        if self.load_t2_opt:
+            img_C = self.img_transform(img_C)
+        
         label = torch.from_numpy(np.array(label, np.uint8)).unsqueeze(dim=0)
 
-        return img_A, img_B, label.squeeze(), name
+        if self.load_t2_opt:
+            return img_A, img_B, label.squeeze(), name, img_C
+        else:
+            return img_A, img_B, label.squeeze(), name
 
     def __len__(self):
         return len(self.imgs_list_A)

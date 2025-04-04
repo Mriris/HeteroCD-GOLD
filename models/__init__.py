@@ -23,44 +23,73 @@ from models.base_model import BaseModel
 
 
 def find_model_using_name(model_name):
-    """导入模块"models/[model_name]_model.py"。
-
-    在文件中，将实例化名为[ModelName]Model()的类。它必须是BaseModel的子类，
-    并且不区分大小写。
     """
+    根据给定的模型名称，导入对应的模块。
+    
+    参数：
+        model_name (str) -- 模型名称
+    
+    返回：
+        模块 (python模块) -- 导入的模块
+    """
+    # 给定模型名称，导入模块 "models/[model_name]_model.py"
     model_filename = "models." + model_name + "_model"
     modellib = importlib.import_module(model_filename)
     model = None
     target_model_name = model_name.replace('_', '') + 'model'
     for name, cls in modellib.__dict__.items():
         if name.lower() == target_model_name.lower() \
-                and issubclass(cls, BaseModel):
+           and issubclass(cls, BaseModel):
             model = cls
 
     if model is None:
-        print("在 %s.py 中找不到名为 %s 的模型" % (model_filename, target_model_name))
+        print("在 %s.py 中没有找到名为 %s 的模型类" % (model_filename, target_model_name))
         exit(0)
-
     return model
 
 
 def get_option_setter(model_name):
-    """返回模型类的静态方法<modify_commandline_options>。"""
+    """返回指定模型名称的选项修改器
+
+    参数：
+        model_name (str) -- 模型名称 (模块名，例如 "cyclegan")
+
+    返回：
+        方法 -- 选项修改器的方法函数
+    """
     model_class = find_model_using_name(model_name)
     return model_class.modify_commandline_options
 
 
 def create_model(opt):
-    """根据选项创建模型。
-
-    此函数包装了CustomDatasetDataLoader类。
-    这是此包与'train.py'/'test.py'之间的主要接口
-
-    示例:
-        >>> from models import create_model
-        >>> model = create_model(opt)
     """
-    model = find_model_using_name(opt.model)
-    instance = model(opt)
-    print("已创建模型 [%s]" % type(instance).__name__)
-    return instance
+    创建模型
+    
+    参数：
+        opt (Option类) -- 存储所有实验标志的类；应为BaseOptions的子类
+
+    返回：
+        模型 (BaseModel类) -- 创建的模型
+    """
+    model = None
+    
+    # 根据命令行参数创建模型
+    if opt.model == 'gan_cd':
+        from .gan_cd import Pix2PixModel
+        model = Pix2PixModel(opt)
+    elif opt.model == 'HeteGAN':
+        from .HeteGAN import Pix2PixModel
+        model = Pix2PixModel(opt)
+    else:
+        raise NotImplementedError('模型[%s]未实现' % opt.model)
+        
+    # 需要额外配置或初始化，如果有setup方法的话
+    if hasattr(model, 'setup'):
+        model.setup(opt)
+        
+    return model
+    
+    
+# 导入供其他模块使用的类和函数
+from .DualEUNet import DualEUNet, TripleEUNet
+from .HeteGAN import Pix2PixModel

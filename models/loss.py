@@ -486,3 +486,162 @@ class DiceLoss(nn.Module):
                 total_loss += dice_loss
 
         return total_loss / target.shape[1]
+
+
+# 添加蒸馏损失
+class DistillationLoss(nn.Module):
+    """用于在线蒸馏的损失函数，支持特征蒸馏和输出蒸馏
+    
+    参数:
+        alpha (float): 软标签蒸馏损失权重
+        temperature (float): 温度参数，用于软化概率分布
+        reduction (str): 损失的缩减方式，可以是'mean', 'sum'
+    """
+    def __init__(self, alpha=0.5, temperature=4.0, reduction='mean'):
+        super(DistillationLoss, self).__init__()
+        self.alpha = alpha
+        self.temperature = temperature
+        self.reduction = reduction
+        # KL散度损失只支持'none', 'mean', 'sum', 'batchmean'
+        self.kl_div = nn.KLDivLoss(reduction=reduction if reduction != 'batchmean' else 'batchmean')
+    
+    def forward(self, student_outputs, teacher_outputs):
+        """计算教师网络和学生网络输出之间的KL散度损失
+        
+        参数:
+            student_outputs (Tensor): 学生网络的输出
+            teacher_outputs (Tensor): 教师网络的输出
+        """
+        # 应用温度缩放
+        soft_student = F.log_softmax(student_outputs / self.temperature, dim=1)
+        soft_teacher = F.softmax(teacher_outputs / self.temperature, dim=1)
+        
+        # 增强对类别1(变化区域)的关注
+        # 提取类别1的概率
+        student_class1 = soft_student[:, 1:2]
+        teacher_class1 = soft_teacher[:, 1:2]
+        
+        # 计算基本KL散度损失
+        loss = self.kl_div(soft_student, soft_teacher) * (self.temperature ** 2)
+        
+        # 为类别1添加额外的MSE损失，更关注变化区域
+        # MSE loss只支持'none', 'mean', 'sum'
+        actual_reduction = 'mean' if self.reduction == 'batchmean' else self.reduction
+        class1_loss = F.mse_loss(
+            student_class1.exp(),  # 转回概率
+            teacher_class1, 
+            reduction=actual_reduction
+        ) * 2.0  # 对类别1的权重提高
+        
+        # 组合损失
+        total_loss = loss + class1_loss
+        
+        return total_loss
+
+
+class FeatureDistillationLoss(nn.Module):
+    """特征蒸馏损失，用于在异源特征间进行知识迁移
+    
+    参数:
+        reduction (str): 损失的缩减方式，可以是'mean', 'sum'
+    """
+    def __init__(self, reduction='mean'):
+        super(FeatureDistillationLoss, self).__init__()
+        self.reduction = reduction
+        
+    def forward(self, student_features, teacher_features, feature_mask=None):
+        """计算教师网络和学生网络特征之间的MSE损失
+        
+        参数:
+            student_features (Tensor): 学生网络的特征
+            teacher_features (Tensor): 教师网络的特征
+            feature_mask (Tensor, optional): 特征注意力掩码，用于选择性关注特定特征区域
+        """
+        # 确保特征尺寸一致
+        if student_features.size() != teacher_features.size():
+            # 调整学生特征尺寸以匹配教师特征
+            student_features = F.interpolate(
+                student_features, 
+                size=teacher_features.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+        
+        # 默认计算全局损失
+        global_loss = F.mse_loss(student_features, teacher_features, reduction=self.reduction)
+        
+        # 应用特征掩码（如果存在）
+        if feature_mask is not None:
+            # 确保掩码尺寸与特征匹配
+            if feature_mask.size()[2:] != teacher_features.size()[2:]:
+                feature_mask = F.interpolate(
+                    feature_mask, 
+                    size=teacher_features.size()[2:], 
+                    mode='nearest'
+                )
+                
+            # 计算局部特征差异
+            # 根据掩码权重调整特征学习
+            masked_student = student_features * feature_mask
+            masked_teacher = teacher_features * feature_mask
+            
+            # 局部区域损失
+            local_loss = F.mse_loss(masked_student, masked_teacher, reduction=self.reduction)
+            
+            # 对特征图进行通道注意力，增强对重要通道的学习
+            student_channel_attention = torch.mean(student_features, dim=[2, 3], keepdim=True)
+            teacher_channel_attention = torch.mean(teacher_features, dim=[2, 3], keepdim=True)
+            
+            # 通道注意力损失
+            channel_loss = F.mse_loss(
+                student_channel_attention, 
+                teacher_channel_attention, 
+                reduction=self.reduction
+            )
+            
+            # 组合损失
+            # 全局损失权重较低，局部和通道损失权重较高
+            loss = global_loss * 0.3 + local_loss * 0.5 + channel_loss * 0.2
+        else:
+            loss = global_loss
+            
+        return loss
+
+
+class MultiLevelDistillationLoss(nn.Module):
+    """多层次蒸馏损失，结合特征蒸馏和输出蒸馏
+    
+    参数:
+        feature_weight (float): 特征蒸馏损失权重
+        output_weight (float): 输出蒸馏损失权重
+        temperature (float): 温度参数，用于软化概率分布
+    """
+    def __init__(self, feature_weight=0.5, output_weight=0.5, temperature=4.0):
+        super(MultiLevelDistillationLoss, self).__init__()
+        self.feature_weight = feature_weight
+        self.output_weight = output_weight
+        self.temperature = temperature
+        
+        self.feature_loss = FeatureDistillationLoss(reduction='mean')
+        self.output_loss = DistillationLoss(alpha=1.0, temperature=temperature, reduction='mean')
+        
+    def forward(self, student_features, teacher_features, student_outputs, teacher_outputs, feature_mask=None):
+        """计算多层次蒸馏损失
+        
+        参数:
+            student_features (Tensor): 学生网络的特征
+            teacher_features (Tensor): 教师网络的特征
+            student_outputs (Tensor): 学生网络的输出
+            teacher_outputs (Tensor): 教师网络的输出
+            feature_mask (Tensor, optional): 特征注意力掩码
+        """
+        # 计算特征蒸馏损失
+        feat_loss = self.feature_loss(student_features, teacher_features, feature_mask)
+        
+        # 计算输出蒸馏损失
+        out_loss = self.output_loss(student_outputs, teacher_outputs)
+        
+        # 结合损失
+        total_loss = self.feature_weight * feat_loss + self.output_weight * out_loss
+        
+        return total_loss, feat_loss, out_loss

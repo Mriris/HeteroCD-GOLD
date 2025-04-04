@@ -610,6 +610,10 @@ class FrequencyEnh(nn.Module):
         self.act_func = nn.Sigmoid() if act == 'sigmoid' else nn.Softmax(dim=1)
 
     def _make_channel_att_layer(self, compress_ratio):
+        """创建通道注意力层
+        参数:
+            compress_ratio (int): 压缩比率
+        """
         return nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(self.in_channels, self.in_channels // compress_ratio, kernel_size=1, bias=True),
@@ -673,8 +677,6 @@ class DualEUNet(nn.Module):
         self.encoder_opt = resnet18()
         # SAR图像编码器 
         self.encoder_sar = resnet18()
-        # 生成器解码器
-        self.gen_decoder = Decoder(n_classes)
         # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
         
@@ -686,26 +688,16 @@ class DualEUNet(nn.Module):
         
         # 特征融合卷积层
         self.fusion_conv1 = nn.Sequential(
-            nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
-            nn.BatchNorm2d(self.channels // 2),
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
+            nn.BatchNorm2d(self.channels),
         )
         self.fusion_conv2 = nn.Sequential(
-            nn.Conv2d(self.channels * len(self.in_channels), self.channels // 2, kernel_size=1),
-            nn.BatchNorm2d(self.channels // 2),
-        )
-        
-        # 生成器特征融合卷积层
-        self.fusion_gen_conv1 = nn.Sequential(
-            nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
-            nn.BatchNorm2d(self.channels // 2),
-        )
-        self.fusion_gen_conv2 = nn.Sequential(
-            nn.Conv2d(self.channels, self.channels // 2, kernel_size=1),
-            nn.BatchNorm2d(self.channels // 2),
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
+            nn.BatchNorm2d(self.channels),
         )
         
         # 分割输出层
-        self.conv_seg = nn.Conv2d(self.channels, 2, kernel_size=1)
+        self.conv_seg = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
         
         # 特征转换卷积层
         for i in range(len(self.in_channels)):
@@ -716,6 +708,7 @@ class DualEUNet(nn.Module):
                     nn.ReLU()
                 )
             )
+            
         for i in range(len(self.in_channels)):
             self.convs2.append(
                 nn.Sequential(
@@ -725,22 +718,13 @@ class DualEUNet(nn.Module):
                 )
             )
         
-        # 注意力和增强模块
+        # 注意力层
         self.atten = self._make_channel_att_layer(compress_ratio=16)
-        self.freqmixenh = FrequencyMixEnh(in_channels=self.channels)
-        self.fusion_layer = nn.Sequential(nn.Conv2d(self.channels * 2, self.channels, kernel_size=1),
-                                          nn.GELU())
         
-        # 特征融合和判别器FFN
-        self.atten_fusion_ffn = MixFFN(
-            embed_dims=self.channels,
-            feedforward_channels=self.channels,
-            ffn_drop=0.,
-            dropout_layer=dict(type='DropPath', drop_prob=0.),
-            act_cfg=dict(type='GELU'))
-        self.discriminator = MixFFN(
-            embed_dims=self.channels,
-            feedforward_channels=self.channels,
+        # 判别器 
+        self.student_discriminator = MixFFN(
+            embed_dims=self.channels * 2,  # 输入通道数是两个特征的拼接
+            feedforward_channels=self.channels * 2,
             ffn_drop=0.,
             dropout_layer=dict(type='DropPath', drop_prob=0.),
             act_cfg=dict(type='GELU'))
@@ -752,9 +736,9 @@ class DualEUNet(nn.Module):
         """
         return nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(self.channels * 2, self.channels * 2 // compress_ratio, kernel_size=1, bias=True),
+            nn.Conv2d(self.channels, self.channels // compress_ratio, kernel_size=1, bias=True),
             nn.ReLU(inplace=True),
-            nn.Conv2d(self.channels * 2 // compress_ratio, self.channels * 2, kernel_size=1, bias=True),
+            nn.Conv2d(self.channels // compress_ratio, self.channels, kernel_size=1, bias=True),
             nn.Sigmoid()
         )
 
@@ -784,7 +768,7 @@ class DualEUNet(nn.Module):
         outs = []
         for idx in range(len(inputs)):
             x = inputs[idx]
-            conv = self.convs1[idx]
+            conv = self.convs2[idx]
             outs.append(
                 resize(
                     input=conv(x),
@@ -792,7 +776,7 @@ class DualEUNet(nn.Module):
                     mode='bilinear',
                     align_corners=False))
         out = self.fusion_conv2(torch.cat(outs, dim=1))
-        return out
+        return out, outs
 
     def cls_seg(self, feat):
         """像素级分类
@@ -804,33 +788,277 @@ class DualEUNet(nn.Module):
         output = self.conv_seg(feat)
         return output
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, x3=None, is_training=True):
         """网络前向传播
         参数:
             x1 (Tensor): 光学图像输入
             x2 (Tensor): SAR图像输入
+            x3 (Tensor, optional): 时间点2的光学图像，用于TripleEUNet（此处不使用）
+            is_training (bool): 是否处于训练模式（此处不使用）
         """
         # 编码器特征提取
         x_sar = self.encoder_sar(x2)
         x_opt = self.encoder_opt(x1)
-
+        
         # 特征融合
         out1 = self.base_forward1(x_opt[1:])
-        out2 = self.base_forward2(x_sar[1:])
-
+        out2, _ = self.base_forward2(x_sar[1:])
+        
         # 判别器处理
         out_ori = torch.cat([out1, out2], dim=1)
-        out_ori = self.discriminator(out_ori)
-
+        out_ori = self.student_discriminator(out_ori)
+        
         # 分割输出
         out = self.cls_seg(out_ori)
-
         return out
 
 
+class TripleEUNet(nn.Module):
+    def __init__(self, n_channels, n_classes, bilinear=False):
+        """三分支EUNet网络
+        参数:
+            n_channels (int): 输入通道数
+            n_classes (int): 输出类别数
+            bilinear (bool): 是否使用双线性插值上采样
+        """
+        super(TripleEUNet, self).__init__()
+        # 分支1: 时间点1的光学图像编码器
+        self.encoder_opt1 = resnet18()
+        # 分支2: 时间点2的SAR图像编码器 (学生网络)
+        self.encoder_sar = resnet18()
+        # 分支3: 时间点2的光学图像编码器 (教师网络)
+        self.encoder_opt2 = resnet18()
+        
+        # Dropout层
+        self.dropout = nn.Dropout2d(p=0.1, inplace=False)
+        
+        # 特征融合相关参数和层
+        self.convs1 = nn.ModuleList()  # 分支1的特征转换模块
+        self.convs2 = nn.ModuleList()  # 分支2的特征转换模块
+        self.convs3 = nn.ModuleList()  # 分支3的特征转换模块
+        
+        self.in_channels = [64, 128, 256, 512]
+        self.channels = 128
+        
+        # 光学-光学特征融合卷积层 (分支1到分支3)
+        self.fusion_conv1 = nn.Sequential(
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
+            nn.BatchNorm2d(self.channels),
+        )
+        # SAR特征融合卷积层 (分支2)
+        self.fusion_conv2 = nn.Sequential(
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
+            nn.BatchNorm2d(self.channels),
+        )
+        # 光学特征融合卷积层 (分支3-教师网络)
+        self.fusion_conv3 = nn.Sequential(
+            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
+            nn.BatchNorm2d(self.channels),
+        )
+        
+        # 分割输出层
+        self.conv_seg = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
+        self.conv_seg_teacher = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
+        
+        # 特征转换卷积层 - 分支1
+        for i in range(len(self.in_channels)):
+            self.convs1.append(
+                nn.Sequential(
+                    nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
+                    nn.BatchNorm2d(self.channels),
+                    nn.ReLU()
+                )
+            )
+        # 特征转换卷积层 - 分支2
+        for i in range(len(self.in_channels)):
+            self.convs2.append(
+                nn.Sequential(
+                    nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
+                    nn.BatchNorm2d(self.channels),
+                    nn.ReLU()
+                )
+            )
+        # 特征转换卷积层 - 分支3
+        for i in range(len(self.in_channels)):
+            self.convs3.append(
+                nn.Sequential(
+                    nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
+                    nn.BatchNorm2d(self.channels),
+                    nn.ReLU()
+                )
+            )
+        
+        # 注意力和增强模块
+        self.atten = self._make_channel_att_layer(compress_ratio=16)
+        
+        # 特征融合和判别器FFN
+        self.student_discriminator = MixFFN(
+            embed_dims=self.channels * 2,  # 因为输入是out1和out2的拼接，所以通道数是2倍
+            feedforward_channels=self.channels * 2,
+            ffn_drop=0.,
+            dropout_layer=dict(type='DropPath', drop_prob=0.),
+            act_cfg=dict(type='GELU'))
+        
+        # 增强教师判别器
+        self.teacher_discriminator = MixFFN(
+            embed_dims=self.channels * 2,  # 因为输入是enhanced_out1和enhanced_out3的拼接
+            feedforward_channels=self.channels * 3,  # 增加教师网络的通道数
+            ffn_drop=0.1,  # 适度的dropout
+            dropout_layer=dict(type='DropPath', drop_prob=0.1),
+            act_cfg=dict(type='GELU'))
+
+    def _make_channel_att_layer(self, compress_ratio):
+        """创建通道注意力层
+        参数:
+            compress_ratio (int): 压缩比率
+        """
+        return nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(self.channels, self.channels // compress_ratio, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.channels // compress_ratio, self.channels, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+
+    def base_forward1(self, inputs):
+        """光学图像特征前向传播 - 分支1
+        参数:
+            inputs (list): 多尺度特征列表
+        """
+        outs = []
+        for idx in range(len(inputs)):
+            x = inputs[idx]
+            conv = self.convs1[idx]
+            outs.append(
+                resize(
+                    input=conv(x),
+                    size=inputs[0].shape[2:],
+                    mode='bilinear',
+                    align_corners=False))
+        out = self.fusion_conv1(torch.cat(outs, dim=1))
+        return out
+
+    def base_forward2(self, inputs):
+        """SAR图像特征前向传播 - 分支2
+        参数:
+            inputs (list): 多尺度特征列表
+        """
+        outs = []
+        for idx in range(len(inputs)):
+            x = inputs[idx]
+            conv = self.convs2[idx]
+            outs.append(
+                resize(
+                    input=conv(x),
+                    size=inputs[0].shape[2:],
+                    mode='bilinear',
+                    align_corners=False))
+        out = self.fusion_conv2(torch.cat(outs, dim=1))
+        return out, outs
+        
+    def base_forward3(self, inputs):
+        """光学图像特征前向传播 - 分支3 (教师网络)
+        参数:
+            inputs (list): 多尺度特征列表
+        """
+        outs = []
+        for idx in range(len(inputs)):
+            x = inputs[idx]
+            conv = self.convs3[idx]
+            outs.append(
+                resize(
+                    input=conv(x),
+                    size=inputs[0].shape[2:],
+                    mode='bilinear',
+                    align_corners=False))
+        out = self.fusion_conv3(torch.cat(outs, dim=1))
+        return out, outs
+
+    def cls_seg(self, feat):
+        """像素级分类
+        参数:
+            feat (Tensor): 输入特征
+        """
+        if self.dropout is not None:
+            feat = self.dropout(feat)
+        output = self.conv_seg(feat)
+        return output
+        
+    def cls_seg_teacher(self, feat):
+        """教师网络的像素级分类
+        参数:
+            feat (Tensor): 输入特征
+        """
+        if self.dropout is not None:
+            feat = self.dropout(feat)
+        output = self.conv_seg_teacher(feat)
+        return output
+
+    def forward(self, x1, x2, x3=None, is_training=True):
+        """网络前向传播
+        参数:
+            x1 (Tensor): 光学图像输入 (时间点1)
+            x2 (Tensor): SAR图像输入 (时间点2)
+            x3 (Tensor, optional): 光学图像输入 (时间点2)，用作教师网络输入
+            is_training (bool): 是否处于训练模式
+        """
+        # 编码器特征提取
+        x_opt1 = self.encoder_opt1(x1)  # 分支1: 时间点1的光学图像
+        x_sar = self.encoder_sar(x2)    # 分支2: 时间点2的SAR图像 (学生网络)
+        
+        # 特征融合 - 学生网络 (光学-SAR)
+        out1 = self.base_forward1(x_opt1[1:])
+        out2, student_features = self.base_forward2(x_sar[1:])
+        
+        # 学生网络特征融合
+        out_student = torch.cat([out1, out2], dim=1)
+        out_student = self.student_discriminator(out_student)
+        
+        # 学生网络分割输出
+        student_out = self.cls_seg(out_student)
+        
+        # 如果提供了x3且处于训练模式，则使用教师网络
+        if x3 is not None and is_training:
+            # 分支3: 时间点2的光学图像 (教师网络)
+            x_opt2 = self.encoder_opt2(x3)
+            
+            # 特征融合 - 教师网络 (光学-光学)
+            out3, teacher_features = self.base_forward3(x_opt2[1:])
+            
+            # 分别对特征应用通道注意力机制
+            attention_out1 = self.atten(out1)
+            attention_out3 = self.atten(out3)
+            
+            # 增强特征
+            enhanced_out1 = out1 * attention_out1
+            enhanced_out3 = out3 * attention_out3
+            
+            # 合并增强后的特征
+            out_teacher = torch.cat([enhanced_out1, enhanced_out3], dim=1)
+            
+            # 使用教师判别器
+            out_teacher = self.teacher_discriminator(out_teacher)
+            
+            # 教师网络分割输出
+            teacher_out = self.cls_seg_teacher(out_teacher)
+            
+            return student_out, teacher_out, out_student, out_teacher, student_features, teacher_features
+        
+        # 测试模式或没有提供x3，只返回学生网络输出
+        return student_out
+
+
 if __name__ == '__main__':
-    model = DualEUNet(3, 2)
-    x1 = torch.randn(1, 3, 256, 256)
-    x2 = torch.randn(1, 3, 256, 256)
-    y = model(x1, x2)
-    print(y[0].shape)
+    model = TripleEUNet(3, 2)
+    x1 = torch.randn(1, 3, 256, 256)  # 时间点1光学图像
+    x2 = torch.randn(1, 3, 256, 256)  # 时间点2 SAR图像
+    x3 = torch.randn(1, 3, 256, 256)  # 时间点2光学图像
+    
+    # 训练模式
+    y_student, y_teacher, feat_s, feat_t, mid_feat_s, mid_feat_t = model(x1, x2, x3, is_training=True)
+    print(f"学生网络输出尺寸: {y_student.shape}")
+    print(f"教师网络输出尺寸: {y_teacher.shape}")
+    
+    # 测试模式
+    y_test = model(x1, x2, is_training=False)
+    print(f"测试模式输出尺寸: {y_test.shape}")
