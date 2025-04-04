@@ -10,9 +10,9 @@ class TrainOptions():
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
+        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='muagan_test',
+        parser.add_argument('--name', type=str, default='muagan_distill3',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='1,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -52,6 +52,8 @@ class TrainOptions():
         parser.add_argument('--distill_temp', type=float, default=2.0, help='蒸馏学习的温度参数')
         parser.add_argument('--distill_alpha', type=float, default=0.5, help='特征蒸馏损失权重')
         parser.add_argument('--distill_beta', type=float, default=0.5, help='输出蒸馏损失权重')
+        parser.add_argument('--kl_div_reduction', type=str, default='batchmean', 
+                            help='KL散度损失的缩减方式 [mean | batchmean | sum | none]。推荐使用batchmean，与KL散度数学定义一致，仅按批次大小平均。')
         
         self.isTrain = True
         return parser

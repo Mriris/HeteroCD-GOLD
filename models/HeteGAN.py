@@ -41,9 +41,10 @@ class Pix2PixModel(BaseModel):
             self.netCD = TripleEUNet(3, 2)
             # 初始化蒸馏损失
             self.distill_loss = MultiLevelDistillationLoss(
-                feature_weight=0.3, 
-                output_weight=0.7, 
-                temperature=2.5
+                feature_weight=getattr(opt, 'distill_alpha', 0.3), 
+                output_weight=getattr(opt, 'distill_beta', 0.7), 
+                temperature=getattr(opt, 'distill_temp', 2.5),
+                reduction=getattr(opt, 'kl_div_reduction', 'batchmean')
             )
         else:
             self.netCD = DualEUNet(3, 2)

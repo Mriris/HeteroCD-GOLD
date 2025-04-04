@@ -495,15 +495,15 @@ class DistillationLoss(nn.Module):
     参数:
         alpha (float): 软标签蒸馏损失权重
         temperature (float): 温度参数，用于软化概率分布
-        reduction (str): 损失的缩减方式，可以是'mean', 'sum'
+        reduction (str): 损失的缩减方式，可以是'mean', 'sum', 'batchmean', 'none'
     """
-    def __init__(self, alpha=0.5, temperature=4.0, reduction='mean'):
+    def __init__(self, alpha=0.5, temperature=4.0, reduction='batchmean'):
         super(DistillationLoss, self).__init__()
         self.alpha = alpha
         self.temperature = temperature
         self.reduction = reduction
         # KL散度损失只支持'none', 'mean', 'sum', 'batchmean'
-        self.kl_div = nn.KLDivLoss(reduction=reduction if reduction != 'batchmean' else 'batchmean')
+        self.kl_div = nn.KLDivLoss(reduction=reduction)
     
     def forward(self, student_outputs, teacher_outputs):
         """计算教师网络和学生网络输出之间的KL散度损失
@@ -615,15 +615,17 @@ class MultiLevelDistillationLoss(nn.Module):
         feature_weight (float): 特征蒸馏损失权重
         output_weight (float): 输出蒸馏损失权重
         temperature (float): 温度参数，用于软化概率分布
+        reduction (str): 损失的缩减方式，可以是'mean', 'sum', 'batchmean', 'none'
     """
-    def __init__(self, feature_weight=0.5, output_weight=0.5, temperature=4.0):
+    def __init__(self, feature_weight=0.5, output_weight=0.5, temperature=4.0, reduction='batchmean'):
         super(MultiLevelDistillationLoss, self).__init__()
         self.feature_weight = feature_weight
         self.output_weight = output_weight
         self.temperature = temperature
+        self.reduction = reduction
         
-        self.feature_loss = FeatureDistillationLoss(reduction='mean')
-        self.output_loss = DistillationLoss(alpha=1.0, temperature=temperature, reduction='mean')
+        self.feature_loss = FeatureDistillationLoss(reduction=self.reduction if self.reduction != 'batchmean' else 'mean')
+        self.output_loss = DistillationLoss(alpha=1.0, temperature=temperature, reduction=self.reduction)
         
     def forward(self, student_features, teacher_features, student_outputs, teacher_outputs, feature_mask=None):
         """计算多层次蒸馏损失
