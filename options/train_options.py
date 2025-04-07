@@ -12,7 +12,7 @@ class TrainOptions():
         # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
                             help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='muagan_distill3',
+        parser.add_argument('--name', type=str, default='muagan_DAT',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='1,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -50,10 +50,17 @@ class TrainOptions():
         # 蒸馏学习参数
         parser.add_argument('--use_distill', action='store_true', default=True, help='是否使用蒸馏学习')
         parser.add_argument('--distill_temp', type=float, default=2.0, help='蒸馏学习的温度参数')
-        parser.add_argument('--distill_alpha', type=float, default=0.5, help='特征蒸馏损失权重')
-        parser.add_argument('--distill_beta', type=float, default=0.5, help='输出蒸馏损失权重')
-        parser.add_argument('--kl_div_reduction', type=str, default='batchmean', 
+        parser.add_argument('--distill_alpha', type=float, default=0.3, help='特征蒸馏损失权重')
+        parser.add_argument('--distill_beta', type=float, default=0.4, help='输出蒸馏损失权重')
+        parser.add_argument('--distill_gamma', type=float, default=0.3, help='差异图注意力迁移损失权重')
+        parser.add_argument('--kl_div_reduction', type=str, default='mean', 
                             help='KL散度损失的缩减方式 [mean | batchmean | sum | none]。推荐使用batchmean，与KL散度数学定义一致，仅按批次大小平均。')
+        
+        # 差异图注意力迁移参数
+        parser.add_argument('--diff_att_alpha', type=float, default=0.5, help='差异图注意力损失中差异图权重')
+        parser.add_argument('--diff_att_beta', type=float, default=0.3, help='差异图注意力损失中通道注意力权重')
+        parser.add_argument('--diff_att_gamma', type=float, default=0.2, help='差异图注意力损失中空间注意力权重')
+        parser.add_argument('--diff_att_scale', type=float, default=10.0, help='差异图注意力总损失的缩放因子')
         
         self.isTrain = True
         return parser

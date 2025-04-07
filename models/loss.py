@@ -647,3 +647,230 @@ class MultiLevelDistillationLoss(nn.Module):
         total_loss = self.feature_weight * feat_loss + self.output_weight * out_loss
         
         return total_loss, feat_loss, out_loss
+
+
+class DifferenceAttentionLoss(nn.Module):
+    """差异图注意力迁移损失，关注变化区域的特征迁移
+    
+    参数:
+        reduction (str): 损失的缩减方式，可以是'mean', 'sum', 'none'
+        alpha (float): 差异图注意力权重
+        beta (float): 通道注意力权重
+        gamma (float): 空间注意力权重
+    """
+    def __init__(self, reduction='mean', alpha=1.0, beta=0.5, gamma=0.5):
+        super(DifferenceAttentionLoss, self).__init__()
+        self.reduction = reduction
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        
+    def _generate_difference_map(self, feat1, feat2):
+        """生成特征差异图
+        
+        参数:
+            feat1 (Tensor): 第一个特征图
+            feat2 (Tensor): 第二个特征图
+            
+        返回:
+            Tensor: 特征差异图
+        """
+        # 确保特征尺寸一致
+        if feat1.size() != feat2.size():
+            feat2 = F.interpolate(
+                feat2, 
+                size=feat1.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+        
+        # 计算差异图 - L2范数
+        diff_map = torch.sqrt(torch.sum((feat1 - feat2)**2, dim=1, keepdim=True))
+        # 标准化差异图到[0,1]
+        diff_map = (diff_map - diff_map.min()) / (diff_map.max() - diff_map.min() + 1e-8)
+        return diff_map
+    
+    def _generate_channel_attention(self, feat):
+        """生成通道注意力图
+        
+        参数:
+            feat (Tensor): 特征图
+            
+        返回:
+            Tensor: 通道注意力图
+        """
+        # 全局平均池化生成通道描述符
+        channel_att = torch.mean(feat, dim=[2, 3], keepdim=True)
+        # 标准化
+        channel_att = F.softmax(channel_att, dim=1)
+        return channel_att
+    
+    def _generate_spatial_attention(self, feat):
+        """生成空间注意力图
+        
+        参数:
+            feat (Tensor): 特征图
+            
+        返回:
+            Tensor: 空间注意力图
+        """
+        # 跨通道最大池化和平均池化
+        max_out, _ = torch.max(feat, dim=1, keepdim=True)
+        avg_out = torch.mean(feat, dim=1, keepdim=True)
+        # 合并注意力图
+        spatial_att = torch.sigmoid(torch.cat([max_out, avg_out], dim=1).mean(dim=1, keepdim=True))
+        return spatial_att
+        
+    def forward(self, student_features, teacher_features, opt_t1, opt_t2, sar_t2):
+        """计算差异图注意力迁移损失
+        
+        参数:
+            student_features (Tensor): 学生网络的特征 (光学t1-SAR异源对)
+            teacher_features (Tensor): 教师网络的特征 (光学t1-光学t2同源对)
+            opt_t1 (Tensor): 时间点1的光学图像特征
+            opt_t2 (Tensor): 时间点2的光学图像特征
+            sar_t2 (Tensor): 时间点2的SAR图像特征
+            
+        返回:
+            Tensor: 差异图注意力迁移损失
+        """
+        # 确保特征尺寸一致
+        if student_features.size() != teacher_features.size():
+            student_features = F.interpolate(
+                student_features, 
+                size=teacher_features.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+        
+        # 确保各个输入特征尺寸一致    
+        if opt_t1.size()[2:] != teacher_features.size()[2:]:
+            opt_t1 = F.interpolate(
+                opt_t1, 
+                size=teacher_features.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+            
+        if opt_t2.size()[2:] != teacher_features.size()[2:]:
+            opt_t2 = F.interpolate(
+                opt_t2, 
+                size=teacher_features.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+            
+        if sar_t2.size()[2:] != teacher_features.size()[2:]:
+            sar_t2 = F.interpolate(
+                sar_t2, 
+                size=teacher_features.size()[2:], 
+                mode='bilinear', 
+                align_corners=False
+            )
+        
+        # 1. 生成差异图注意力 - 关注变化区域
+        # 教师网络内部差异图 - 光学t1和光学t2的差异
+        teacher_diff_map = self._generate_difference_map(opt_t1, opt_t2)
+        
+        # 学生网络内部差异图 - 光学t1和SAR t2的差异
+        student_diff_map = self._generate_difference_map(opt_t1, sar_t2)
+        
+        # 归一化差异图
+        teacher_diff_map = teacher_diff_map / (torch.sum(teacher_diff_map) + 1e-8)
+        student_diff_map = student_diff_map / (torch.sum(student_diff_map) + 1e-8)
+        
+        # 2. 生成通道注意力
+        teacher_channel_att = self._generate_channel_attention(teacher_features)
+        student_channel_att = self._generate_channel_attention(student_features)
+        
+        # 3. 生成空间注意力
+        teacher_spatial_att = self._generate_spatial_attention(teacher_features)
+        student_spatial_att = self._generate_spatial_attention(student_features)
+        
+        # 4. 计算差异图注意力迁移损失
+        diff_att_loss = F.mse_loss(
+            student_diff_map * teacher_diff_map, 
+            teacher_diff_map,
+            reduction=self.reduction
+        )
+        
+        # 5. 计算通道注意力迁移损失
+        channel_att_loss = F.mse_loss(
+            student_channel_att,
+            teacher_channel_att,
+            reduction=self.reduction
+        )
+        
+        # 6. 计算空间注意力迁移损失
+        spatial_att_loss = F.mse_loss(
+            student_spatial_att,
+            teacher_spatial_att,
+            reduction=self.reduction
+        )
+        
+        # 7. 加权组合损失
+        total_loss = self.alpha * diff_att_loss + self.beta * channel_att_loss + self.gamma * spatial_att_loss
+        
+        return total_loss, diff_att_loss, channel_att_loss, spatial_att_loss
+        
+
+class HeterogeneousAttentionDistillationLoss(nn.Module):
+    """异源注意力蒸馏损失，结合差异图注意力迁移和特征蒸馏
+    
+    参数:
+        feature_weight (float): 特征蒸馏损失权重
+        output_weight (float): 输出蒸馏损失权重
+        diff_att_weight (float): 差异图注意力迁移损失权重
+        temperature (float): 温度参数，用于软化概率分布
+        reduction (str): 损失的缩减方式
+    """
+    def __init__(self, feature_weight=0.3, output_weight=0.4, diff_att_weight=0.3, 
+                 temperature=4.0, reduction='batchmean'):
+        super(HeterogeneousAttentionDistillationLoss, self).__init__()
+        self.feature_weight = feature_weight
+        self.output_weight = output_weight
+        self.diff_att_weight = diff_att_weight
+        self.temperature = temperature
+        self.reduction = reduction
+        
+        # 特征蒸馏损失
+        self.feature_loss = FeatureDistillationLoss(reduction=self.reduction if self.reduction != 'batchmean' else 'mean')
+        # 输出蒸馏损失
+        self.output_loss = DistillationLoss(alpha=1.0, temperature=temperature, reduction=self.reduction)
+        # 差异图注意力迁移损失
+        self.diff_att_loss = DifferenceAttentionLoss(reduction='mean')
+        
+    def forward(self, student_features, teacher_features, student_outputs, teacher_outputs, 
+                opt_t1, opt_t2, sar_t2, feature_mask=None):
+        """计算异源注意力蒸馏损失
+        
+        参数:
+            student_features (Tensor): 学生网络的特征
+            teacher_features (Tensor): 教师网络的特征
+            student_outputs (Tensor): 学生网络的输出
+            teacher_outputs (Tensor): 教师网络的输出
+            opt_t1 (Tensor): 时间点1的光学图像特征
+            opt_t2 (Tensor): 时间点2的光学图像特征
+            sar_t2 (Tensor): 时间点2的SAR图像特征
+            feature_mask (Tensor, optional): 特征注意力掩码
+            
+        返回:
+            tuple: (总损失, 特征损失, 输出损失, 差异图注意力损失)
+        """
+        # 计算特征蒸馏损失
+        feat_loss = self.feature_loss(student_features, teacher_features, feature_mask)
+        
+        # 计算输出蒸馏损失
+        out_loss = self.output_loss(student_outputs, teacher_outputs)
+        
+        # 计算差异图注意力迁移损失
+        diff_att_total, diff_att_loss, channel_att_loss, spatial_att_loss = self.diff_att_loss(
+            student_features, teacher_features, opt_t1, opt_t2, sar_t2
+        )
+        
+        # 结合损失
+        total_loss = (self.feature_weight * feat_loss + 
+                      self.output_weight * out_loss + 
+                      self.diff_att_weight * diff_att_total)
+        
+        return total_loss, feat_loss, out_loss, diff_att_total

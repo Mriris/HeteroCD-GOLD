@@ -860,6 +860,15 @@ class TripleEUNet(nn.Module):
         self.conv_seg = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
         self.conv_seg_teacher = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
         
+        # 差异图生成模块
+        self.diff_attention = nn.Sequential(
+            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.channels, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+        
         # 特征转换卷积层 - 分支1
         for i in range(len(self.in_channels)):
             self.convs1.append(
@@ -906,6 +915,39 @@ class TripleEUNet(nn.Module):
             ffn_drop=0.1,  # 适度的dropout
             dropout_layer=dict(type='DropPath', drop_prob=0.1),
             act_cfg=dict(type='GELU'))
+        
+        # 差异图注意力迁移模块
+        # 学生网络差异图生成
+        self.student_diff_module = nn.Sequential(
+            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.channels, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+        
+        # 教师网络差异图生成
+        self.teacher_diff_module = nn.Sequential(
+            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.channels, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+        
+        # 混合融合模块 - 学生网络
+        self.student_fusion = nn.Sequential(
+            nn.Conv2d(self.channels * 2 + 1, self.channels * 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels * 2),
+            nn.ReLU(inplace=True)
+        )
+        
+        # 混合融合模块 - 教师网络
+        self.teacher_fusion = nn.Sequential(
+            nn.Conv2d(self.channels * 2 + 1, self.channels * 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels * 2),
+            nn.ReLU(inplace=True)
+        )
 
     def _make_channel_att_layer(self, compress_ratio):
         """创建通道注意力层
@@ -1010,12 +1052,16 @@ class TripleEUNet(nn.Module):
         out1 = self.base_forward1(x_opt1[1:])
         out2, student_features = self.base_forward2(x_sar[1:])
         
-        # 学生网络特征融合
-        out_student = torch.cat([out1, out2], dim=1)
-        out_student = self.student_discriminator(out_student)
+        # 生成学生网络的差异图注意力
+        student_concat = torch.cat([out1, out2], dim=1)
+        student_diff_attention = self.student_diff_module(student_concat)
+        
+        # 应用差异图注意力到学生网络特征
+        student_out_with_attention = torch.cat([student_concat, student_diff_attention], dim=1)
+        student_enhanced = self.student_fusion(student_out_with_attention)
         
         # 学生网络分割输出
-        student_out = self.cls_seg(out_student)
+        student_out = self.cls_seg(student_enhanced)
         
         # 如果提供了x3且处于训练模式，则使用教师网络
         if x3 is not None and is_training:
@@ -1025,24 +1071,33 @@ class TripleEUNet(nn.Module):
             # 特征融合 - 教师网络 (光学-光学)
             out3, teacher_features = self.base_forward3(x_opt2[1:])
             
-            # 分别对特征应用通道注意力机制
-            attention_out1 = self.atten(out1)
-            attention_out3 = self.atten(out3)
+            # 生成教师网络的差异图注意力
+            teacher_concat = torch.cat([out1, out3], dim=1)
+            teacher_diff_attention = self.teacher_diff_module(teacher_concat)
             
-            # 增强特征
-            enhanced_out1 = out1 * attention_out1
-            enhanced_out3 = out3 * attention_out3
-            
-            # 合并增强后的特征
-            out_teacher = torch.cat([enhanced_out1, enhanced_out3], dim=1)
-            
-            # 使用教师判别器
-            out_teacher = self.teacher_discriminator(out_teacher)
+            # 应用差异图注意力到教师网络特征
+            teacher_out_with_attention = torch.cat([teacher_concat, teacher_diff_attention], dim=1)
+            teacher_enhanced = self.teacher_fusion(teacher_out_with_attention)
             
             # 教师网络分割输出
-            teacher_out = self.cls_seg_teacher(out_teacher)
+            teacher_out = self.cls_seg_teacher(teacher_enhanced)
             
-            return student_out, teacher_out, out_student, out_teacher, student_features, teacher_features
+            # 保存中间特征，用于差异图注意力迁移损失计算
+            # 原始特征
+            opt_t1_feat = out1
+            opt_t2_feat = out3
+            sar_t2_feat = out2
+            
+            # 保存差异图注意力掩码，用于后续损失计算
+            self.student_diff_attention = student_diff_attention
+            self.teacher_diff_attention = teacher_diff_attention
+            
+            # 增强后的特征 (整合了差异图注意力的特征)
+            out_student = student_enhanced
+            out_teacher = teacher_enhanced
+            
+            # 同时返回原始特征，用于差异图注意力迁移损失计算
+            return student_out, teacher_out, out_student, out_teacher, student_features, teacher_features, opt_t1_feat, opt_t2_feat, sar_t2_feat
         
         # 测试模式或没有提供x3，只返回学生网络输出
         return student_out

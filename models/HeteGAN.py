@@ -26,7 +26,7 @@ class Pix2PixModel(BaseModel):
         """
         BaseModel.__init__(self, opt, is_train=True)
         # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
-        self.loss_names = ['CD', 'Distill']
+        self.loss_names = ['CD', 'Distill', 'Diff_Att']
         # 指定要保存/显示的图像。训练/测试脚本将调用<BaseModel.get_current_visuals>
         self.change_pred = None
         self.teacher_pred = None
@@ -39,12 +39,20 @@ class Pix2PixModel(BaseModel):
         # 定义网络
         if self.use_distill:
             self.netCD = TripleEUNet(3, 2)
-            # 初始化蒸馏损失
-            self.distill_loss = MultiLevelDistillationLoss(
+            # 使用新的异源注意力蒸馏损失
+            self.distill_loss = HeterogeneousAttentionDistillationLoss(
                 feature_weight=getattr(opt, 'distill_alpha', 0.3), 
-                output_weight=getattr(opt, 'distill_beta', 0.7), 
+                output_weight=getattr(opt, 'distill_beta', 0.5), 
+                diff_att_weight=getattr(opt, 'distill_gamma', 0.2),
                 temperature=getattr(opt, 'distill_temp', 2.5),
                 reduction=getattr(opt, 'kl_div_reduction', 'batchmean')
+            )
+            # 额外添加差异图注意力迁移损失
+            self.diff_att_loss = DifferenceAttentionLoss(
+                reduction='mean',
+                alpha=1.0,
+                beta=0.5,
+                gamma=0.5
             )
         else:
             self.netCD = DualEUNet(3, 2)
@@ -136,8 +144,8 @@ class Pix2PixModel(BaseModel):
         self.netCD.eval()
         with torch.no_grad():
             # 使用第一个光学图像和第二个光学图像进行预测
-            student_out, teacher_out, _, _, _, _ = self.netCD(
-                self.opt_img, self.opt_img2, self.opt_img2, is_training=True
+            student_out, teacher_out, _, _, _, _, _, _, _ = self.netCD(
+                self.opt_img, self.sar_img, self.opt_img2, is_training=True
             )
             self.teacher_pred = teacher_out
             
@@ -150,8 +158,11 @@ class Pix2PixModel(BaseModel):
     def forward_CD(self):
         """执行变化检测的前向传播"""
         if self.use_distill and self.opt_img2 is not None and self.is_train:
-            # 使用三分支网络进行训练
-            self.student_out, self.teacher_out, self.student_feat, self.teacher_feat, self.student_mid_feat, self.teacher_mid_feat = self.netCD(
+            # 使用增强的三分支网络进行训练，返回值包括原始特征
+            # (学生输出, 教师输出, 学生增强特征, 教师增强特征, 学生中间特征, 教师中间特征, 光学t1特征, 光学t2特征, SAR t2特征)
+            self.student_out, self.teacher_out, self.student_feat, self.teacher_feat, \
+            self.student_mid_feat, self.teacher_mid_feat, self.opt_t1_feat, \
+            self.opt_t2_feat, self.sar_t2_feat = self.netCD(
                 self.opt_img, self.sar_img, self.opt_img2, is_training=True
             )
             self.change_pred = self.student_out
@@ -171,8 +182,9 @@ class Pix2PixModel(BaseModel):
         self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights) * 100 + Dice_loss(
             self.change_pred, self.label) * 100
             
-        # 初始化蒸馏损失为0
+        # 初始化蒸馏损失和差异图注意力损失为0
         self.loss_Distill = torch.tensor(0.0).cuda()
+        self.loss_Diff_Att = torch.tensor(0.0).cuda()
         
         # 如果使用蒸馏学习且有教师网络输出
         if self.use_distill and hasattr(self, 'teacher_out') and self.teacher_out is not None:
@@ -203,19 +215,29 @@ class Pix2PixModel(BaseModel):
                 mode='nearest'
             )
             
-            # 计算蒸馏损失，但降低权重
-            self.loss_Distill, feat_loss, out_loss = self.distill_loss(
+            # 计算差异图注意力损失 - 使用原始特征而不是增强后的特征
+            diff_att_total, diff_att_loss, channel_att_loss, spatial_att_loss = self.diff_att_loss(
+                self.student_feat, self.teacher_feat, 
+                self.opt_t1_feat, self.opt_t2_feat, self.sar_t2_feat
+            )
+            self.loss_Diff_Att = diff_att_total * 10.0  # 设置适当的权重
+            
+            # 计算异源注意力蒸馏损失
+            self.loss_Distill, feat_loss, out_loss, _ = self.distill_loss(
                 self.student_feat,
                 self.teacher_feat,
                 self.change_pred,
                 teacher_out_resized,
+                self.opt_t1_feat,
+                self.opt_t2_feat,
+                self.sar_t2_feat,
                 feature_mask
             )
-            # 将蒸馏损失权重从10降低到2
-            self.loss_Distill = self.loss_Distill * 2.0
+            # 设置合适的蒸馏损失权重
+            self.loss_Distill = self.loss_Distill * 5.0
 
         # 组合损失并计算梯度
-        self.loss_G = self.loss_CD + self.loss_Distill
+        self.loss_G = self.loss_CD + self.loss_Distill + self.loss_Diff_Att
         self.loss_G.backward()
 
     def optimize_parameters(self, epoch):
