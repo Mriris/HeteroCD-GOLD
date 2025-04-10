@@ -4,7 +4,11 @@ from . import networks
 from .DualEUNet import DualEUNet, TripleEUNet
 from .loss import *
 import os
+import math
 from collections import OrderedDict
+import torch.nn as nn
+import torch.nn.functional as F
+from .loss import HeterogeneousAttentionDistillationLoss, DifferenceAttentionLoss, DynamicHeterogeneousWeightTransferLoss
 
 
 class Pix2PixModel(BaseModel):
@@ -25,16 +29,45 @@ class Pix2PixModel(BaseModel):
             opt (Option类) -- 存储所有实验标志的类；需要是BaseOptions的子类
         """
         BaseModel.__init__(self, opt, is_train=True)
+        
+        # 是否使用三分支网络和蒸馏学习
+        self.use_distill = opt.use_distill
+        
+        # 添加动态权重分配相关参数
+        self.use_dynamic_weights = opt.use_dynamic_weights  # 直接从opt中获取参数值
+        self.weight_warmup_epochs = opt.weight_warmup_epochs  # 权重热身阶段的轮次数
+        self.current_epoch = 0           # 当前训练轮次
+        
+        # 初始权重设置
+        self.init_cd_weight = opt.init_cd_weight
+        self.init_distill_weight = opt.init_distill_weight
+        self.init_diff_att_weight = opt.init_diff_att_weight
+        
         # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
-        self.loss_names = ['CD', 'Distill', 'Diff_Att']
+        self.loss_names = ['CD']  # 基础损失名称
+        if self.use_distill:
+            self.loss_names.extend(['Distill', 'Diff_Att'])
+            if self.use_dynamic_weights:
+                self.loss_names.append('Dynamic_Weight')
+                # 初始化权重不确定性参数 (可学习参数)
+                self.log_vars = nn.Parameter(torch.zeros(3))  # 为CD、Distill和Diff_Att损失创建可学习的权重参数
+                # 只在启用动态权重时添加动态异源权重迁移损失
+                self.dynamic_weight_loss = DynamicHeterogeneousWeightTransferLoss(
+                    reduction='mean'
+                )
+            else:
+                self.log_vars = None
+                self.dynamic_weight_loss = None
+        else:
+            self.log_vars = None
+            self.dynamic_weight_loss = None
+            
         # 指定要保存/显示的图像。训练/测试脚本将调用<BaseModel.get_current_visuals>
         self.change_pred = None
         self.teacher_pred = None
         self.isTrain = is_train
         # 指定要保存到磁盘的模型。训练/测试脚本将调用<BaseModel.save_networks>和<BaseModel.load_networks>
         self.model_names = ['CD']
-        # 是否使用三分支网络和蒸馏学习
-        self.use_distill = getattr(opt, 'use_distill', True)
         
         # 定义网络
         if self.use_distill:
@@ -64,9 +97,60 @@ class Pix2PixModel(BaseModel):
             self.netCD = torch.nn.DataParallel(self.netCD, opt.gpu_ids)  # 多GPU支持
 
         if self.isTrain:
-            self.optimizer_G = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.netCD.parameters()), lr=opt.lr,
+            # 将log_vars添加到优化器中
+            params = [
+                {'params': filter(lambda p: p.requires_grad, self.netCD.parameters())},
+            ]
+            if self.use_dynamic_weights and self.log_vars is not None:
+                params.append({'params': self.log_vars, 'lr': opt.lr * 0.1})  # 使用较小的学习率优化权重参数
+            self.optimizer_G = torch.optim.AdamW(params, lr=opt.lr,
                                                  betas=(0.9, 0.999), weight_decay=0.01)
             self.optimizers.append(self.optimizer_G)
+
+    def set_epoch(self, epoch):
+        """设置当前训练轮次，用于动态权重计算
+
+        参数:
+            epoch (int): 当前训练轮次
+        """
+        self.current_epoch = epoch
+
+    def get_dynamic_weights(self):
+        """计算基于不确定性的动态权重
+
+        返回:
+            tuple: (CD损失权重, 蒸馏损失权重, 差异图注意力损失权重)
+        """
+        # 基于不确定性的权重计算
+        # 参考: "Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics"
+        if self.use_dynamic_weights:
+            # 使用softmax确保权重归一化 (为了数值稳定性，先应用softplus，再归一化)
+            precision = torch.exp(-self.log_vars)
+            
+            # 应用热身和训练进度调整
+            if self.current_epoch < self.weight_warmup_epochs:
+                # 热身阶段: 从固定权重逐渐过渡到动态权重
+                progress = self.current_epoch / self.weight_warmup_epochs
+                # 固定的初始权重
+                fixed_weights = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], device=self.log_vars.device)
+                fixed_weights = fixed_weights / fixed_weights.sum()  # 归一化
+                # 混合固定权重和动态权重
+                weights = (1 - progress) * fixed_weights + progress * precision
+            else:
+                weights = precision
+                
+            # 归一化权重并缩放到适当范围
+            weights = weights / weights.sum()
+            
+            # 重新缩放权重到原始量级
+            scale_factors = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], device=self.log_vars.device)
+            weights = weights * scale_factors.sum()
+            scaled_weights = weights * scale_factors
+            
+            return scaled_weights[0].item(), scaled_weights[1].item(), scaled_weights[2].item()
+        else:
+            # 使用固定权重
+            return self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight
 
     def set_input(self, A, B, label, name, device, C=None):
         """从数据加载器解包输入数据并执行必要的预处理步骤。
@@ -186,6 +270,10 @@ class Pix2PixModel(BaseModel):
         self.loss_Distill = torch.tensor(0.0).cuda()
         self.loss_Diff_Att = torch.tensor(0.0).cuda()
         
+        # 只在启用动态权重时初始化Dynamic_Weight损失
+        if self.use_dynamic_weights and self.dynamic_weight_loss is not None:
+            self.loss_Dynamic_Weight = torch.tensor(0.0).cuda()
+        
         # 如果使用蒸馏学习且有教师网络输出
         if self.use_distill and hasattr(self, 'teacher_out') and self.teacher_out is not None:
             # 调整教师网络输出尺寸以匹配学生网络
@@ -220,10 +308,17 @@ class Pix2PixModel(BaseModel):
                 self.student_feat, self.teacher_feat, 
                 self.opt_t1_feat, self.opt_t2_feat, self.sar_t2_feat
             )
-            self.loss_Diff_Att = diff_att_total * 10.0  # 设置适当的权重
+            
+            # 只在启用动态权重时计算动态异源权重迁移损失
+            if self.use_dynamic_weights and self.dynamic_weight_loss is not None:
+                dynamic_weight_total, dynamic_feat_loss, dynamic_att_loss, dynamic_diff_loss = self.dynamic_weight_loss(
+                    self.student_feat, self.teacher_feat,
+                    self.opt_t1_feat, self.opt_t2_feat, self.sar_t2_feat
+                )
+                self.loss_Dynamic_Weight = dynamic_weight_total
             
             # 计算异源注意力蒸馏损失
-            self.loss_Distill, feat_loss, out_loss, _ = self.distill_loss(
+            distill_total, feat_loss, out_loss, _ = self.distill_loss(
                 self.student_feat,
                 self.teacher_feat,
                 self.change_pred,
@@ -233,11 +328,44 @@ class Pix2PixModel(BaseModel):
                 self.sar_t2_feat,
                 feature_mask
             )
-            # 设置合适的蒸馏损失权重
-            self.loss_Distill = self.loss_Distill * 5.0
+            
+            # 记录原始损失值（用于显示）
+            self.loss_CD_orig = self.loss_CD.clone().detach()
+            self.loss_Distill = distill_total
+            self.loss_Diff_Att = diff_att_total
+            
+            # 应用权重
+            if self.use_dynamic_weights and self.log_vars is not None:
+                # 获取动态权重
+                cd_weight, distill_weight, diff_att_weight = self.get_dynamic_weights()
+                dynamic_weight = diff_att_weight * 0.5  # 设置动态异源权重迁移损失权重为差异图注意力损失权重的一半
+                
+                self.loss_CD = self.loss_CD * cd_weight
+                self.loss_Distill = self.loss_Distill * distill_weight
+                self.loss_Diff_Att = self.loss_Diff_Att * diff_att_weight
+                if hasattr(self, 'loss_Dynamic_Weight'):
+                    self.loss_Dynamic_Weight = self.loss_Dynamic_Weight * dynamic_weight
+                
+                # 打印当前权重（仅用于调试）
+                if self.current_epoch % 10 == 0 and torch.cuda.current_device() == 0:
+                    print(f"当前动态权重: CD={cd_weight:.2f}, Distill={distill_weight:.2f}, Diff_Att={diff_att_weight:.2f}, Dynamic={dynamic_weight:.2f}")
+            else:
+                # 使用固定权重
+                self.loss_CD = self.loss_CD * self.init_cd_weight
+                self.loss_Distill = self.loss_Distill * self.init_distill_weight
+                self.loss_Diff_Att = self.loss_Diff_Att * self.init_diff_att_weight
+        else:
+            # 如果不使用蒸馏学习，则只使用CD损失
+            if self.use_dynamic_weights and self.log_vars is not None:
+                cd_weight, _, _ = self.get_dynamic_weights()
+                self.loss_CD = self.loss_CD * cd_weight
+            else:
+                self.loss_CD = self.loss_CD * self.init_cd_weight
 
         # 组合损失并计算梯度
         self.loss_G = self.loss_CD + self.loss_Distill + self.loss_Diff_Att
+        if self.use_dynamic_weights and hasattr(self, 'loss_Dynamic_Weight'):
+            self.loss_G += self.loss_Dynamic_Weight
         self.loss_G.backward()
 
     def optimize_parameters(self, epoch):
@@ -249,12 +377,12 @@ class Pix2PixModel(BaseModel):
         返回:
             tensor: 变化检测的预测结果
         """
-        self.netCD.train()
-        self.forward_CD()
-        self.optimizer_G.zero_grad()  # 将G的梯度设为零
-        self.backward_G()  # 计算G的梯度
-        self.optimizer_G.step()
-        return self.change_pred
+        self.set_epoch(epoch)  # 更新当前训练轮次
+        self.forward_CD()      # 计算前向传播
+        self.optimizer_G.zero_grad()  # 清空梯度
+        self.backward_G()      # 计算损失并反向传播
+        self.optimizer_G.step()  # 更新参数
+        return self.change_pred  # 返回变化检测结果
 
     def save_networks(self, epoch, save_best=False):
         """将所有网络保存到磁盘，覆盖基类方法以支持保存最佳模型
@@ -412,3 +540,16 @@ class Pix2PixModel(BaseModel):
                 except Exception as e:
                     print(f"加载模型时出错: {e}")
                     print(f"无法加载模型，将使用初始化的权重！")
+
+    def get_current_losses(self):
+        """返回当前损失的有序字典"""
+        losses = {}
+        # 只返回loss_names中列出的损失，并且确保该损失确实存在
+        for name in self.loss_names:
+            loss_name = 'loss_' + name
+            if hasattr(self, loss_name):
+                loss_value = getattr(self, loss_name)
+                # 确保损失值不是None且不是0张量
+                if loss_value is not None and not (isinstance(loss_value, torch.Tensor) and loss_value.item() == 0):
+                    losses[name] = loss_value.item()
+        return losses

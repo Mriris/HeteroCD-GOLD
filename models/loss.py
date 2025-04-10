@@ -650,169 +650,187 @@ class MultiLevelDistillationLoss(nn.Module):
 
 
 class DifferenceAttentionLoss(nn.Module):
-    """差异图注意力迁移损失，关注变化区域的特征迁移
-    
-    参数:
-        reduction (str): 损失的缩减方式，可以是'mean', 'sum', 'none'
-        alpha (float): 差异图注意力权重
-        beta (float): 通道注意力权重
-        gamma (float): 空间注意力权重
-    """
-    def __init__(self, reduction='mean', alpha=1.0, beta=0.5, gamma=0.5):
+    def __init__(self, reduction='mean', alpha=0.5, beta=0.3, gamma=0.2):
         super(DifferenceAttentionLoss, self).__init__()
         self.reduction = reduction
+        # 差异图权重，通道注意力权重和空间注意力权重
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         
-    def _generate_difference_map(self, feat1, feat2):
-        """生成特征差异图
-        
-        参数:
-            feat1 (Tensor): 第一个特征图
-            feat2 (Tensor): 第二个特征图
-            
-        返回:
-            Tensor: 特征差异图
+    def forward(self, student_feat, teacher_feat, opt_t1_feat, opt_t2_feat, sar_t2_feat):
         """
-        # 确保特征尺寸一致
-        if feat1.size() != feat2.size():
-            feat2 = F.interpolate(
-                feat2, 
-                size=feat1.size()[2:], 
-                mode='bilinear', 
-                align_corners=False
-            )
+        计算差异图注意力迁移损失
         
-        # 计算差异图 - L2范数
-        diff_map = torch.sqrt(torch.sum((feat1 - feat2)**2, dim=1, keepdim=True))
-        # 标准化差异图到[0,1]
-        diff_map = (diff_map - diff_map.min()) / (diff_map.max() - diff_map.min() + 1e-8)
-        return diff_map
+        Args:
+            student_feat: 学生网络的特征图
+            teacher_feat: 教师网络的特征图
+            opt_t1_feat: 时间点1的光学图像特征
+            opt_t2_feat: 时间点2的光学图像特征
+            sar_t2_feat: 时间点2的SAR图像特征
+            
+        Returns:
+            total_loss: 总损失
+            diff_loss: 差异图损失
+            channel_loss: 通道注意力损失
+            spatial_loss: 空间注意力损失
+        """
+        # 计算光学图像差异图
+        diff_optical = torch.abs(opt_t1_feat - opt_t2_feat)
+        # 计算异源图像差异图
+        diff_hetero = torch.abs(opt_t1_feat - sar_t2_feat)
+        
+        # 计算差异图损失
+        diff_loss = F.mse_loss(diff_hetero, diff_optical, reduction=self.reduction)
+        
+        # 计算通道注意力
+        teacher_channel_att = torch.mean(teacher_feat, dim=(2, 3), keepdim=True)
+        student_channel_att = torch.mean(student_feat, dim=(2, 3), keepdim=True)
+        
+        # 计算通道注意力损失
+        channel_loss = F.mse_loss(student_channel_att, teacher_channel_att, reduction=self.reduction)
+        
+        # 计算空间注意力
+        teacher_spatial_att = torch.mean(teacher_feat, dim=1, keepdim=True)
+        student_spatial_att = torch.mean(student_feat, dim=1, keepdim=True)
+        
+        # 计算空间注意力损失
+        spatial_loss = F.mse_loss(student_spatial_att, teacher_spatial_att, reduction=self.reduction)
+        
+        # 计算总损失
+        total_loss = self.alpha * diff_loss + self.beta * channel_loss + self.gamma * spatial_loss
+        
+        return total_loss, diff_loss, channel_loss, spatial_loss
+
+
+class DynamicHeterogeneousWeightTransferLoss(nn.Module):
+    """动态异源权重迁移损失，用于增强异源图像变化检测中的特征迁移能力
     
-    def _generate_channel_attention(self, feat):
-        """生成通道注意力图
+    通过融合多种注意力机制和动态权重分配，实现更有效的异源特征对齐
+    """
+    
+    def __init__(self, reduction='mean'):
+        super(DynamicHeterogeneousWeightTransferLoss, self).__init__()
+        self.reduction = reduction
+        self.cosine_similarity = nn.CosineSimilarity(dim=1)
+        self.mse_loss = nn.MSELoss(reduction=reduction)
         
-        参数:
-            feat (Tensor): 特征图
+    def compute_attention(self, feat):
+        """计算特征的空间注意力和通道注意力
+        
+        Args:
+            feat (tensor): 输入特征 [B, C, H, W]
             
-        返回:
-            Tensor: 通道注意力图
+        Returns:
+            tuple: (空间注意力, 通道注意力)
         """
-        # 全局平均池化生成通道描述符
-        channel_att = torch.mean(feat, dim=[2, 3], keepdim=True)
-        # 标准化
+        # 通道注意力 - 突出重要通道
+        channel_att = torch.mean(feat, dim=(2, 3), keepdim=True)  # [B, C, 1, 1]
         channel_att = F.softmax(channel_att, dim=1)
-        return channel_att
+        
+        # 空间注意力 - 突出重要区域
+        spatial_att = torch.mean(feat, dim=1, keepdim=True)  # [B, 1, H, W]
+        spatial_att = torch.sigmoid(spatial_att)
+        
+        return spatial_att, channel_att
     
-    def _generate_spatial_attention(self, feat):
-        """生成空间注意力图
+    def compute_difference_map(self, feat1, feat2):
+        """计算两个特征图之间的差异图
         
-        参数:
-            feat (Tensor): 特征图
+        Args:
+            feat1 (tensor): 第一个特征图 [B, C, H, W]
+            feat2 (tensor): 第二个特征图 [B, C, H, W]
             
-        返回:
-            Tensor: 空间注意力图
+        Returns:
+            tensor: 差异图
         """
-        # 跨通道最大池化和平均池化
-        max_out, _ = torch.max(feat, dim=1, keepdim=True)
-        avg_out = torch.mean(feat, dim=1, keepdim=True)
-        # 合并注意力图
-        spatial_att = torch.sigmoid(torch.cat([max_out, avg_out], dim=1).mean(dim=1, keepdim=True))
-        return spatial_att
+        # 欧氏距离差异图
+        l2_diff = torch.sqrt(torch.sum((feat1 - feat2) ** 2, dim=1, keepdim=True) + 1e-6)
         
-    def forward(self, student_features, teacher_features, opt_t1, opt_t2, sar_t2):
-        """计算差异图注意力迁移损失
+        # 余弦相似度差异图（转换为距离）
+        feat1_flat = feat1.permute(0, 2, 3, 1).reshape(-1, feat1.size(1))
+        feat2_flat = feat2.permute(0, 2, 3, 1).reshape(-1, feat2.size(1))
+        cos_sim = self.cosine_similarity(feat1_flat, feat2_flat).reshape(
+            feat1.size(0), 1, feat1.size(2), feat1.size(3)
+        )
+        cos_diff = 1 - cos_sim
         
-        参数:
-            student_features (Tensor): 学生网络的特征 (光学t1-SAR异源对)
-            teacher_features (Tensor): 教师网络的特征 (光学t1-光学t2同源对)
-            opt_t1 (Tensor): 时间点1的光学图像特征
-            opt_t2 (Tensor): 时间点2的光学图像特征
-            sar_t2 (Tensor): 时间点2的SAR图像特征
+        # 结合两种差异图
+        combined_diff = l2_diff * cos_diff
+        return combined_diff
+    
+    def compute_dynamic_weight(self, diff_map):
+        """基于差异图计算动态权重掩码
+        
+        Args:
+            diff_map (tensor): 差异图 [B, 1, H, W]
             
-        返回:
-            Tensor: 差异图注意力迁移损失
+        Returns:
+            tensor: 动态权重掩码
         """
-        # 确保特征尺寸一致
-        if student_features.size() != teacher_features.size():
-            student_features = F.interpolate(
-                student_features, 
-                size=teacher_features.size()[2:], 
-                mode='bilinear', 
-                align_corners=False
-            )
-        
-        # 确保各个输入特征尺寸一致    
-        if opt_t1.size()[2:] != teacher_features.size()[2:]:
-            opt_t1 = F.interpolate(
-                opt_t1, 
-                size=teacher_features.size()[2:], 
-                mode='bilinear', 
-                align_corners=False
-            )
-            
-        if opt_t2.size()[2:] != teacher_features.size()[2:]:
-            opt_t2 = F.interpolate(
-                opt_t2, 
-                size=teacher_features.size()[2:], 
-                mode='bilinear', 
-                align_corners=False
-            )
-            
-        if sar_t2.size()[2:] != teacher_features.size()[2:]:
-            sar_t2 = F.interpolate(
-                sar_t2, 
-                size=teacher_features.size()[2:], 
-                mode='bilinear', 
-                align_corners=False
-            )
-        
-        # 1. 生成差异图注意力 - 关注变化区域
-        # 教师网络内部差异图 - 光学t1和光学t2的差异
-        teacher_diff_map = self._generate_difference_map(opt_t1, opt_t2)
-        
-        # 学生网络内部差异图 - 光学t1和SAR t2的差异
-        student_diff_map = self._generate_difference_map(opt_t1, sar_t2)
-        
         # 归一化差异图
-        teacher_diff_map = teacher_diff_map / (torch.sum(teacher_diff_map) + 1e-8)
-        student_diff_map = student_diff_map / (torch.sum(student_diff_map) + 1e-8)
+        # 先在H维度上计算最小值，然后在W维度上计算
+        diff_min = torch.min(torch.min(diff_map, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+        diff_max = torch.max(torch.max(diff_map, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+        norm_diff = (diff_map - diff_min) / (diff_max - diff_min + 1e-6)
         
-        # 2. 生成通道注意力
-        teacher_channel_att = self._generate_channel_attention(teacher_features)
-        student_channel_att = self._generate_channel_attention(student_features)
+        # 将差异值高的区域赋予更高的权重
+        weight_mask = torch.exp(norm_diff)
+        return weight_mask
+    
+    def forward(self, student_feat, teacher_feat, opt_t1_feat, opt_t2_feat, sar_t2_feat):
+        """计算动态异源权重迁移损失
         
-        # 3. 生成空间注意力
-        teacher_spatial_att = self._generate_spatial_attention(teacher_features)
-        student_spatial_att = self._generate_spatial_attention(student_features)
+        Args:
+            student_feat (tensor): 学生网络特征 [B, C, H, W]
+            teacher_feat (tensor): 教师网络特征 [B, C, H, W]
+            opt_t1_feat (tensor): 时间点1的光学图像特征 [B, C, H, W]
+            opt_t2_feat (tensor): 时间点2的光学图像特征 [B, C, H, W]
+            sar_t2_feat (tensor): 时间点2的SAR图像特征 [B, C, H, W]
+            
+        Returns:
+            tuple: (总损失, 特征迁移损失, 注意力迁移损失, 差异图迁移损失)
+        """
+        # 确保所有特征的空间尺寸一致
+        if student_feat.size(2) != teacher_feat.size(2) or student_feat.size(3) != teacher_feat.size(3):
+            teacher_feat = F.interpolate(
+                teacher_feat, 
+                size=(student_feat.size(2), student_feat.size(3)),
+                mode='bilinear', 
+                align_corners=True
+            )
         
-        # 4. 计算差异图注意力迁移损失
-        diff_att_loss = F.mse_loss(
-            student_diff_map * teacher_diff_map, 
-            teacher_diff_map,
-            reduction=self.reduction
-        )
+        # 计算光学图像对的差异图（教师网络的指导）
+        optical_diff_map = self.compute_difference_map(opt_t1_feat, opt_t2_feat)
         
-        # 5. 计算通道注意力迁移损失
-        channel_att_loss = F.mse_loss(
-            student_channel_att,
-            teacher_channel_att,
-            reduction=self.reduction
-        )
+        # 计算异源图像对的差异图（学生网络的预测）
+        hetero_diff_map = self.compute_difference_map(opt_t1_feat, sar_t2_feat)
         
-        # 6. 计算空间注意力迁移损失
-        spatial_att_loss = F.mse_loss(
-            student_spatial_att,
-            teacher_spatial_att,
-            reduction=self.reduction
-        )
+        # 计算差异图迁移损失
+        diff_map_loss = self.mse_loss(hetero_diff_map, optical_diff_map)
         
-        # 7. 加权组合损失
-        total_loss = self.alpha * diff_att_loss + self.beta * channel_att_loss + self.gamma * spatial_att_loss
+        # 计算动态权重掩码
+        weight_mask = self.compute_dynamic_weight(optical_diff_map)
         
-        return total_loss, diff_att_loss, channel_att_loss, spatial_att_loss
+        # 计算注意力
+        teacher_spatial_att, teacher_channel_att = self.compute_attention(teacher_feat)
+        student_spatial_att, student_channel_att = self.compute_attention(student_feat)
         
+        # 计算注意力迁移损失
+        spatial_att_loss = self.mse_loss(student_spatial_att, teacher_spatial_att)
+        channel_att_loss = self.mse_loss(student_channel_att, teacher_channel_att)
+        att_loss = spatial_att_loss + channel_att_loss
+        
+        # 使用动态权重计算特征迁移损失
+        weighted_teacher_feat = teacher_feat * weight_mask
+        weighted_student_feat = student_feat * weight_mask
+        feature_loss = self.mse_loss(weighted_student_feat, weighted_teacher_feat)
+        
+        # 总损失 - 自适应组合三种损失
+        total_loss = feature_loss + att_loss + diff_map_loss
+        
+        return total_loss, feature_loss, att_loss, diff_map_loss
+
 
 class HeterogeneousAttentionDistillationLoss(nn.Module):
     """异源注意力蒸馏损失，结合差异图注意力迁移和特征蒸馏

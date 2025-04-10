@@ -11,8 +11,8 @@ class TrainOptions():
     def initialize(self, parser):
         # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
-                            help='图像路径（应该有子文件夹trainA, trainB, valA, valB等）')
-        parser.add_argument('--name', type=str, default='muagan_DAT',
+                            help='图像路径')
+        parser.add_argument('--name', type=str, default='muagan_dynamic4',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='1,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -61,6 +61,13 @@ class TrainOptions():
         parser.add_argument('--diff_att_beta', type=float, default=0.3, help='差异图注意力损失中通道注意力权重')
         parser.add_argument('--diff_att_gamma', type=float, default=0.2, help='差异图注意力损失中空间注意力权重')
         parser.add_argument('--diff_att_scale', type=float, default=10.0, help='差异图注意力总损失的缩放因子')
+        
+        # 动态权重分配参数
+        parser.add_argument('--use_dynamic_weights', action='store_true', default=True, help='是否使用动态权重分配机制')
+        parser.add_argument('--weight_warmup_epochs', type=int, default=10, help='权重热身阶段的轮次数')
+        parser.add_argument('--init_cd_weight', type=float, default=100.0, help='变化检测损失的初始权重')
+        parser.add_argument('--init_distill_weight', type=float, default=5.0, help='蒸馏损失的初始权重')
+        parser.add_argument('--init_diff_att_weight', type=float, default=10.0, help='差异图注意力损失的初始权重')
         
         self.isTrain = True
         return parser
