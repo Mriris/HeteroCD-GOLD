@@ -124,26 +124,39 @@ class Pix2PixModel(BaseModel):
         # 基于不确定性的权重计算
         # 参考: "Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics"
         if self.use_dynamic_weights:
-            # 使用softmax确保权重归一化 (为了数值稳定性，先应用softplus，再归一化)
-            precision = torch.exp(-self.log_vars)
+            # 使用softplus确保数值稳定性，替代直接使用指数
+            precision = torch.nn.functional.softplus(-self.log_vars) + 1e-8
+            
+            # 引入变化区域关注因子 - 提高对CD损失的注重度
+            # 变化区域通常是少数类，需要更高的权重来平衡
+            cd_focus_factor = 1.2
+            precision[0] = precision[0] * cd_focus_factor  # 增加CD损失的权重
             
             # 应用热身和训练进度调整
             if self.current_epoch < self.weight_warmup_epochs:
                 # 热身阶段: 从固定权重逐渐过渡到动态权重
                 progress = self.current_epoch / self.weight_warmup_epochs
                 # 固定的初始权重
-                fixed_weights = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], device=self.log_vars.device)
-                fixed_weights = fixed_weights / fixed_weights.sum()  # 归一化
-                # 混合固定权重和动态权重
-                weights = (1 - progress) * fixed_weights + progress * precision
-            else:
-                weights = precision
+                fixed_weights = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], 
+                                            device=self.log_vars.device)
                 
-            # 归一化权重并缩放到适当范围
-            weights = weights / weights.sum()
-            
+                # 平滑过渡：使用更平滑的函数 - cos函数而不是线性
+                alpha = 0.5 * (1 - math.cos(progress * math.pi))
+                
+                # 归一化固定权重
+                fixed_weights = fixed_weights / fixed_weights.sum()
+                
+                # 混合固定权重和动态权重
+                weights = (1 - alpha) * fixed_weights + alpha * (precision / precision.sum())
+            else:
+                # 训练后期：添加自适应衰减机制，逐渐增加CD损失权重
+                late_stage_factor = min(1.0 + (self.current_epoch - self.weight_warmup_epochs) / 100.0, 1.5)
+                precision[0] = precision[0] * late_stage_factor
+                weights = precision / precision.sum()
+                
             # 重新缩放权重到原始量级
-            scale_factors = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], device=self.log_vars.device)
+            scale_factors = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], 
+                                         device=self.log_vars.device)
             weights = weights * scale_factors.sum()
             scaled_weights = weights * scale_factors
             
@@ -258,13 +271,16 @@ class Pix2PixModel(BaseModel):
         """计算生成器的损失并进行反向传播"""
         self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2), self.opt_img.size(3)),
                                          mode='bilinear', align_corners=True)
-        # 调整类权重，大幅提高类别1(变化区域)的权重
+        # 调整类权重，进一步提高类别1(变化区域)的权重
         cls_weights = torch.tensor([0.1, 0.9]).cuda()
         self.label = self.label.long()
         
-        # 主要变化检测损失
-        self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights) * 100 + Dice_loss(
-            self.change_pred, self.label) * 100
+        # 主要变化检测损失 - 增加类别平衡焦点损失成分，提高对变化区域的关注
+        ce_loss = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)
+        dice_loss = Dice_loss(self.change_pred, self.label)
+        
+        # 添加手动类别重要性调整，进一步关注变化区域
+        self.loss_CD = ce_loss * 100 + dice_loss * 150  # 增加Dice损失权重，因为它对小区域更敏感
             
         # 初始化蒸馏损失和差异图注意力损失为0
         self.loss_Distill = torch.tensor(0.0).cuda()
@@ -293,9 +309,9 @@ class Pix2PixModel(BaseModel):
                 
             feature_mask = torch.zeros_like(label_mask, dtype=torch.float)
             # 将类别1区域的权重设置得更高，以增强对变化区域的学习
-            feature_mask[label_mask == 1] = 3.0
+            feature_mask[label_mask == 1] = 5.0  # 增加变化区域权重
             # 将类别0区域设置较低权重但不为0
-            feature_mask[label_mask == 0] = 0.5
+            feature_mask[label_mask == 0] = 0.3  # 降低非变化区域权重
             
             feature_mask = F.interpolate(
                 feature_mask, 
@@ -346,9 +362,9 @@ class Pix2PixModel(BaseModel):
                 if hasattr(self, 'loss_Dynamic_Weight'):
                     self.loss_Dynamic_Weight = self.loss_Dynamic_Weight * dynamic_weight
                 
-                # 打印当前权重（仅用于调试）
-                if self.current_epoch % 10 == 0 and torch.cuda.current_device() == 0:
-                    print(f"当前动态权重: CD={cd_weight:.2f}, Distill={distill_weight:.2f}, Diff_Att={diff_att_weight:.2f}, Dynamic={dynamic_weight:.2f}")
+                # # 打印当前权重（仅用于调试）
+                # if self.current_epoch % 10 == 0 and torch.cuda.current_device() == 0:
+                #     print(f"当前动态权重: CD={cd_weight:.2f}, Distill={distill_weight:.2f}, Diff_Att={diff_att_weight:.2f}, Dynamic={dynamic_weight:.2f}")
             else:
                 # 使用固定权重
                 self.loss_CD = self.loss_CD * self.init_cd_weight
