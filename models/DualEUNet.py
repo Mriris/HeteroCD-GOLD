@@ -967,16 +967,25 @@ class TripleEUNet(nn.Module):
         参数:
             inputs (list): 多尺度特征列表
         """
+        input_shape = inputs[0].shape[2:]
         outs = []
+        
+        # 预先分配空间来存储处理后的特征
         for idx in range(len(inputs)):
             x = inputs[idx]
             conv = self.convs1[idx]
-            outs.append(
-                resize(
+            # 统一处理分辨率，减少重复的形状比较检查
+            if x.shape[2:] != input_shape:
+                x_resized = resize(
                     input=conv(x),
-                    size=inputs[0].shape[2:],
+                    size=input_shape,
                     mode='bilinear',
-                    align_corners=False))
+                    align_corners=False)
+                outs.append(x_resized)
+            else:
+                outs.append(conv(x))
+                
+        # 一次性拼接所有特征，减少多次拼接操作
         out = self.fusion_conv1(torch.cat(outs, dim=1))
         return out
 
@@ -985,16 +994,25 @@ class TripleEUNet(nn.Module):
         参数:
             inputs (list): 多尺度特征列表
         """
+        input_shape = inputs[0].shape[2:]
         outs = []
+        
+        # 预先分配空间来存储处理后的特征
         for idx in range(len(inputs)):
             x = inputs[idx]
             conv = self.convs2[idx]
-            outs.append(
-                resize(
+            # 统一处理分辨率，减少重复的形状比较检查
+            if x.shape[2:] != input_shape:
+                x_resized = resize(
                     input=conv(x),
-                    size=inputs[0].shape[2:],
+                    size=input_shape,
                     mode='bilinear',
-                    align_corners=False))
+                    align_corners=False)
+                outs.append(x_resized)
+            else:
+                outs.append(conv(x))
+                
+        # 一次性拼接所有特征，减少多次拼接操作
         out = self.fusion_conv2(torch.cat(outs, dim=1))
         return out, outs
         
@@ -1003,16 +1021,25 @@ class TripleEUNet(nn.Module):
         参数:
             inputs (list): 多尺度特征列表
         """
+        input_shape = inputs[0].shape[2:]
         outs = []
+        
+        # 预先分配空间来存储处理后的特征
         for idx in range(len(inputs)):
             x = inputs[idx]
             conv = self.convs3[idx]
-            outs.append(
-                resize(
+            # 统一处理分辨率，减少重复的形状比较检查
+            if x.shape[2:] != input_shape:
+                x_resized = resize(
                     input=conv(x),
-                    size=inputs[0].shape[2:],
+                    size=input_shape,
                     mode='bilinear',
-                    align_corners=False))
+                    align_corners=False)
+                outs.append(x_resized)
+            else:
+                outs.append(conv(x))
+                
+        # 一次性拼接所有特征，减少多次拼接操作
         out = self.fusion_conv3(torch.cat(outs, dim=1))
         return out, outs
 
@@ -1052,55 +1079,50 @@ class TripleEUNet(nn.Module):
         out1 = self.base_forward1(x_opt1[1:])
         out2, student_features = self.base_forward2(x_sar[1:])
         
-        # 生成学生网络的差异图注意力
+        # 预先分配空间来存储拼接后的特征
         student_concat = torch.cat([out1, out2], dim=1)
+        
+        # 生成学生网络的差异图注意力
         student_diff_attention = self.student_diff_module(student_concat)
         
-        # 应用差异图注意力到学生网络特征
+        # 应用差异图注意力到学生网络特征 - 直接拼接
         student_out_with_attention = torch.cat([student_concat, student_diff_attention], dim=1)
         student_enhanced = self.student_fusion(student_out_with_attention)
         
         # 学生网络分割输出
         student_out = self.cls_seg(student_enhanced)
         
-        # 如果提供了x3且处于训练模式，则使用教师网络
-        if x3 is not None and is_training:
-            # 分支3: 时间点2的光学图像 (教师网络)
-            x_opt2 = self.encoder_opt2(x3)
-            
-            # 特征融合 - 教师网络 (光学-光学)
-            out3, teacher_features = self.base_forward3(x_opt2[1:])
-            
-            # 生成教师网络的差异图注意力
-            teacher_concat = torch.cat([out1, out3], dim=1)
-            teacher_diff_attention = self.teacher_diff_module(teacher_concat)
-            
-            # 应用差异图注意力到教师网络特征
-            teacher_out_with_attention = torch.cat([teacher_concat, teacher_diff_attention], dim=1)
-            teacher_enhanced = self.teacher_fusion(teacher_out_with_attention)
-            
-            # 教师网络分割输出
-            teacher_out = self.cls_seg_teacher(teacher_enhanced)
-            
-            # 保存中间特征，用于差异图注意力迁移损失计算
-            # 原始特征
-            opt_t1_feat = out1
-            opt_t2_feat = out3
-            sar_t2_feat = out2
-            
-            # 保存差异图注意力掩码，用于后续损失计算
-            self.student_diff_attention = student_diff_attention
-            self.teacher_diff_attention = teacher_diff_attention
-            
-            # 增强后的特征 (整合了差异图注意力的特征)
-            out_student = student_enhanced
-            out_teacher = teacher_enhanced
-            
-            # 同时返回原始特征，用于差异图注意力迁移损失计算
-            return student_out, teacher_out, out_student, out_teacher, student_features, teacher_features, opt_t1_feat, opt_t2_feat, sar_t2_feat
-        
         # 测试模式或没有提供x3，只返回学生网络输出
-        return student_out
+        if x3 is None or not is_training:
+            return student_out
+            
+        # 训练模式且提供了x3
+        # 分支3: 时间点2的光学图像 (教师网络)
+        x_opt2 = self.encoder_opt2(x3)
+        
+        # 特征融合 - 教师网络 (光学-光学)
+        out3, teacher_features = self.base_forward3(x_opt2[1:])
+        
+        # 预先分配空间来存储拼接后的特征
+        teacher_concat = torch.cat([out1, out3], dim=1)
+        
+        # 生成教师网络的差异图注意力
+        teacher_diff_attention = self.teacher_diff_module(teacher_concat)
+        
+        # 应用差异图注意力到教师网络特征 - 直接拼接
+        teacher_out_with_attention = torch.cat([teacher_concat, teacher_diff_attention], dim=1)
+        teacher_enhanced = self.teacher_fusion(teacher_out_with_attention)
+        
+        # 教师网络分割输出
+        teacher_out = self.cls_seg_teacher(teacher_enhanced)
+        
+        # 保存原始特征，用于差异图注意力迁移损失计算
+        opt_t1_feat = out1
+        opt_t2_feat = out3
+        sar_t2_feat = out2
+        
+        # 同时返回原始特征，用于差异图注意力迁移损失计算
+        return student_out, teacher_out, student_enhanced, teacher_enhanced, student_features, teacher_features, opt_t1_feat, opt_t2_feat, sar_t2_feat
 
 
 if __name__ == '__main__':

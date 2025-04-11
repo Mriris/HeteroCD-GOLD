@@ -21,6 +21,10 @@ class TrainOptions:
                             help='网络初始化方式 [normal | xavier | kaiming | orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02,
                             help='normal、xavier和orthogonal的缩放因子。')
+        parser.add_argument('--use_amp', action='store_true', default=True, 
+                            help='是否使用混合精度训练（需要PyTorch>=1.6），可以加速训练，但可能会降低稳定性')
+        parser.add_argument('--gradient_clip_norm', type=float, default=1.0,
+                            help='梯度裁剪的最大范数值，用于避免梯度爆炸')
         # 附加参数
         parser.add_argument('--epoch', type=str, default='latest',
                             help='加载哪个epoch？设置为latest使用最新的缓存模型')

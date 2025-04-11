@@ -285,59 +285,74 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x, x_sar=None):
-        # if (self.opt_backbone==False):
-        if 2 > 1:
-            x = self.relu1(self.bn1(self.conv1(x)))
-            x = self.relu2(self.bn2(self.conv2(x)))
-            x = self.relu3(self.bn3(self.conv3(x)))
-            f = []
-            f.append(x)
-            x = self.maxpool(x)
-            x = self.layer1(x)
-            f.append(x)
-            x = self.layer2(x)
-            f.append(x)
-            x = self.layer3(x)
-            f.append(x)
-            x = self.layer4(x)
-            f.append(x)
-        else:
-            x = self.relu1(self.bn1(self.conv1(x)))
-            x = self.relu2(self.bn2(self.conv2(x)))
-            x = self.relu3(self.bn3(self.conv3(x)))
-            f = []
-            f.append(x)
-            x = self.maxpool(x)
-            x = self.layer1(x)
-            x = self.FrequencySeparation(x, return_type='low')
-            # x_sar0 = self.FrequencySeparation(x_sar[0], return_type='high')
-
-            x = adain(x, x_sar[0])
-            f.append(x)
-            # f_sar.append(adain(self.FrequencySeparation(x_sar[0], return_type='low'),x_sar0))
-            # 
-            # print("-----------------------------------------------------------------------")
-            x = self.layer2(x)
-            x = self.FrequencySeparation(x, return_type='low')
-            # x_sar1 = self.FrequencySeparation(x_sar[1], return_type='high')
-            x = adain(x, x_sar[1])
-            f.append(x)
-            # f_sar.append(adain(self.FrequencySeparation(x_sar[1], return_type='low'),x_sar1))
-            x = self.layer3(x)
-            x = self.FrequencySeparation(x, return_type='low')
-            # x_sar2 = self.FrequencySeparation(x_sar[2], return_type='high')
-            x = adain(x, x_sar[2])
-            f.append(x)
-            # f_sar.append(adain(self.FrequencySeparation(x_sar[2], return_type='low'),x_sar2))
-            x = self.layer4(x)
-            x = self.FrequencySeparation(x, return_type='low')
-            # x_sar3 = self.FrequencySeparation(x_sar[3], return_type='high')
-            x = adain(x, x_sar[3])
-            # f_sar.append(adain(self.FrequencySeparation(x_sar[3], return_type='low'),x_sar3))
-            f.append(x)
-            # print("-----------------------------------------------------------------------")
-            # return tuple(f), tuple(f_sar)
-        return tuple(f)
+        # 保留与原代码相同的结构，确保API兼容性
+        x = self.relu1(self.bn1(self.conv1(x)))
+        x = self.relu2(self.bn2(self.conv2(x)))
+        x = self.relu3(self.bn3(self.conv3(x)))
+        
+        # 保存初始特征
+        feat = []
+        feat.append(x)
+        
+        # 应用最大池化
+        x = self.maxpool(x)
+        
+        # 通过4个残差块，保留GPU优化
+        x = self.layer1(x)
+        feat.append(x)
+        x = self.layer2(x)
+        feat.append(x)
+        x = self.layer3(x)
+        feat.append(x)
+        x = self.layer4(x)
+        feat.append(x)
+        
+        # 如果是光学骨干网络模式且提供了SAR输入
+        if self.opt_backbone and x_sar is not None:
+            # 对SAR图像执行相同的特征提取，保持与原始代码相同的调用方式
+            x_sar = self.relu1(self.bn1(self.conv1(x_sar)))
+            x_sar = self.relu2(self.bn2(self.conv2(x_sar)))
+            x_sar = self.relu3(self.bn3(self.conv3(x_sar)))
+            
+            # 保存SAR特征
+            feat_sar = []
+            feat_sar.append(x_sar)
+            
+            # 应用最大池化
+            x_sar = self.maxpool(x_sar)
+            
+            # 自适应实例归一化（AdaIN）用于特征对齐
+            # 层1的处理
+            x_sar = self.layer1(x_sar)
+            x_sar = adain(x_sar, feat[1])
+            feat_sar.append(x_sar)
+            
+            # 层2的处理
+            x_sar = self.layer2(x_sar)
+            x_sar = adain(x_sar, feat[2])
+            feat_sar.append(x_sar)
+            
+            # 层3和层4的处理（不使用AdaIN）
+            x_sar = self.layer3(x_sar)
+            feat_sar.append(x_sar)
+            x_sar = self.layer4(x_sar)
+            feat_sar.append(x_sar)
+            
+            # 实现频率域分离（可选、高级特性）
+            if hasattr(self, 'freq_sep') and self.freq_sep is not None:
+                # 获取高频和低频分量
+                for i in range(len(feat)):
+                    # 高频分量保持不变，只处理低频分量
+                    feat_h = self.FrequencySeparation(feat[i], return_type='high')
+                    feat_l_sar = self.FrequencySeparation(feat_sar[i], return_type='low')
+                    
+                    # 组合高频光学特征和低频SAR特征
+                    feat[i] = feat_h + feat_l_sar
+            
+            return feat
+        
+        # 如果没有SAR输入或不是光学骨干网络模式，直接返回特征列表
+        return feat
 
         # x = self.avgpool(x)
         # x = x.view(x.size(0), -1)

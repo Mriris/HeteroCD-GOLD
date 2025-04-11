@@ -258,9 +258,11 @@ class TripleHeteCD(BaseModel):
         else:
             # 使用双分支网络或者三分支网络的测试模式
             self.change_pred = self.netCD(self.opt_img, self.sar_img)
+        
+        return self.change_pred
 
-    def backward_G(self):
-        """计算生成器的损失并进行反向传播"""
+    def compute_losses(self):
+        """计算损失但不执行反向传播，用于与混合精度训练配合使用"""
         self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2), self.opt_img.size(3)),
                                          mode='bilinear', align_corners=True)
         # 调整类权重，进一步提高类别1(变化区域)的权重
@@ -370,11 +372,17 @@ class TripleHeteCD(BaseModel):
             else:
                 self.loss_CD = self.loss_CD * self.init_cd_weight
 
-        # 组合损失并计算梯度
+        # 组合损失
         self.loss_G = self.loss_CD + self.loss_Distill + self.loss_Diff_Att
         if self.use_dynamic_weights and hasattr(self, 'loss_Dynamic_Weight'):
             self.loss_G += self.loss_Dynamic_Weight
-        self.loss_G.backward()
+            
+        return self.loss_G
+
+    def backward_G(self):
+        """计算生成器的损失并进行反向传播"""
+        self.compute_losses()  # 计算损失
+        self.loss_G.backward()  # 反向传播
 
     def optimize_parameters(self, epoch):
         """优化模型参数
@@ -409,10 +417,10 @@ class TripleHeteCD(BaseModel):
                 net = getattr(self, 'net' + name)
 
                 if len(self.gpu_ids) > 0 and torch.cuda.is_available():
-                    torch.save(net.module.cpu().state_dict(), save_path)
-                    net.cuda(self.gpu_ids[0])
+                    # 直接保存GPU上的模型状态字典，避免不必要的GPU-CPU传输
+                    torch.save(net.module.state_dict(), save_path)
                 else:
-                    torch.save(net.cpu().state_dict(), save_path)
+                    torch.save(net.state_dict(), save_path)
 
                 print(f'模型已保存: {save_path}')
 

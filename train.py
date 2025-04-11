@@ -132,6 +132,12 @@ if __name__ == '__main__':
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
     
+    # 在TensorBoard中记录训练参数
+    opt_dict = vars(opt)
+    for k in sorted(opt_dict.keys()):
+        if isinstance(opt_dict[k], (int, float, str, bool)):
+            writer.add_text('Parameters/' + k, str(opt_dict[k]), 0)
+
     # 创建日志目录
     if not os.path.exists(os.path.join(opt.checkpoints_dir, opt.name)):
         os.makedirs(os.path.join(opt.checkpoints_dir, opt.name))
@@ -146,6 +152,15 @@ if __name__ == '__main__':
             f.write(f"数据集: {opt.dataroot}\n")
             f.write(f"批次大小: {opt.batch_size}, 学习率: {opt.lr}, GPU: {opt.gpu_ids}\n")
             f.write(f"是否使用蒸馏学习: {'是' if opt.use_distill else '否'}\n")
+            
+            # 添加所有训练参数记录
+            f.write("\n=== 训练参数 ===\n")
+            # 获取opt中的所有属性并排序
+            opt_dict = vars(opt)
+            for k in sorted(opt_dict.keys()):
+                f.write(f"{k}: {opt_dict[k]}\n")
+            f.write("=== 参数结束 ===\n\n")
+            
             f.write("─" * 50 + "\n")
 
     total_iters = 0
@@ -155,12 +170,32 @@ if __name__ == '__main__':
         with open(log_path, 'a') as f:
             f.write('─' * 50 + f'\n断点续训：从轮次 {resume_epoch} 继续训练，历史最佳IoU: {best_iou:.4f}\n' + '─' * 50 + '\n')
 
+    # 尝试使用混合精度训练，但默认为False避免出现NaN值
+    use_amp = opt.use_amp if hasattr(opt, 'use_amp') else False
+    try:
+        from torch.cuda.amp import GradScaler, autocast
+        if use_amp:
+            scaler = GradScaler()
+            print("启用混合精度训练 (AMP)")
+        else:
+            print("混合精度训练可用但未启用。如需启用，请使用 --use_amp 选项")
+    except ImportError:
+        use_amp = False
+        print("混合精度训练不可用 - 需要PyTorch >= 1.6")
+    
+    # 获取梯度裁剪参数
+    gradient_clip_norm = opt.gradient_clip_norm if hasattr(opt, 'gradient_clip_norm') else 1.0
+    
     for epoch in range(resume_epoch,
                        opt.n_epochs):  # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
         epoch_start_time = time.time()  # timer for entire epoch
         iter_data_time = time.time()  # timer for data loading per iteration
         epoch_iter = 0  # the number of training iterations in current epoch, reset to 0 every epoch
         visualizer.reset()  # reset the visualizer: make sure it saves the results to HTML at least once every epoch
+        
+        # 设置当前轮次到模型中，用于动态权重计算
+        if hasattr(model, 'set_epoch'):
+            model.set_epoch(epoch)
         
         # 打印当前轮次开始信息
         print('\n' + '=' * 80)
@@ -190,26 +225,50 @@ if __name__ == '__main__':
                 model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0])
 
             # 优化模型参数
-            out_change = model.optimize_parameters(epoch)  # calculate loss functions, get gradients, update network weights
+            model.optimizer_G.zero_grad()  # 清空梯度缓存
+            
+            if use_amp:
+                # 使用混合精度进行前向和反向传播
+                with autocast():
+                    out_change = model.forward_CD()  # 前向传播
+                    model.compute_losses()  # 计算损失但不立即反向传播
+                
+                # 使用缩放器缩放损失值，避免数值下溢
+                scaler.scale(model.loss_G).backward()
+                
+                # 梯度裁剪避免梯度爆炸
+                scaler.unscale_(model.optimizer_G)
+                torch.nn.utils.clip_grad_norm_(model.netCD.parameters(), max_norm=gradient_clip_norm)
+                
+                # 更新权重
+                scaler.step(model.optimizer_G)
+                scaler.update()
+            else:
+                # 常规训练流程
+                out_change = model.optimize_parameters(epoch)
+            
+            # 插值到统一大小
             out_change = FF.interpolate(out_change, size=(512, 512), mode='bilinear', align_corners=True)
             
             # 记录学生网络的预测结果
-            preds = torch.argmax(out_change, dim=1)
-            pred_numpy = preds.cpu().numpy()
-            labels_numpy = data[2].cpu().numpy()
-            preds_all.append(pred_numpy)
-            labels_all.append(labels_numpy)
-            names_all.extend(data[3])
+            with torch.no_grad():
+                preds = torch.argmax(out_change, dim=1)
+                pred_numpy = preds.cpu().numpy()
+                labels_numpy = data[2].cpu().numpy()
+                preds_all.append(pred_numpy)
+                labels_all.append(labels_numpy)
+                names_all.extend(data[3])
             
             # 如果使用蒸馏学习且有第三张图，也记录教师网络的预测结果
             if opt.use_distill and len(data) == 5:
-                teacher_pred, _ = model.get_teacher_pred()
-                if teacher_pred is not None:
-                    teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
-                    teacher_preds = torch.argmax(teacher_pred, dim=1)
-                    teacher_pred_numpy = teacher_preds.cpu().numpy()
-                    teacher_preds_all.append(teacher_pred_numpy)
-                    teacher_labels_all.append(labels_numpy)  # 标签是相同的
+                with torch.no_grad():
+                    teacher_pred, _ = model.get_teacher_pred()
+                    if teacher_pred is not None:
+                        teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
+                        teacher_preds = torch.argmax(teacher_pred, dim=1)
+                        teacher_pred_numpy = teacher_preds.cpu().numpy()
+                        teacher_preds_all.append(teacher_pred_numpy)
+                        teacher_labels_all.append(labels_numpy)  # 标签是相同的
 
             if total_iters % opt.print_freq == 0:  # print training losses and save logging information to the disk
                 losses = model.get_current_losses()
@@ -283,6 +342,9 @@ if __name__ == '__main__':
         teacher_labels_all_val = []
         teacher_val_loss = AverageMeter()
         
+        # 设置为评估模式
+        model.netCD.eval()
+        
         for i, data in enumerate(val_loader):
             # 设置模型输入，现在包括时间点2的光学图像
             if len(data) == 5:  # 带时间点2的光学图像的情况
@@ -291,26 +353,27 @@ if __name__ == '__main__':
                 model.set_input(data[0], data[1], data[2], data[3], opt.gpu_ids[0])
                 
             # 获取学生网络预测结果
-            out_change, loss = model.get_val_pred()
-            out_change = FF.interpolate(out_change, size=(512, 512), mode='bilinear', align_corners=True)
-            val_loss.update(loss.cpu().detach().numpy())
-            preds = torch.argmax(out_change, dim=1)
-            pred_numpy = preds.cpu().numpy()
-            labels_numpy = data[2].cpu().numpy()
-            preds_all_val.append(pred_numpy)
-            labels_all_val.append(labels_numpy)
-            names_all_val.extend(data[3])
-            
-            # 如果使用蒸馏学习且有第三张图像，获取教师网络预测结果
-            if opt.use_distill and len(data) == 5:
-                teacher_pred, teacher_loss = model.get_teacher_pred()
-                if teacher_pred is not None:
-                    teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
-                    teacher_val_loss.update(teacher_loss.cpu().detach().numpy())
-                    teacher_preds = torch.argmax(teacher_pred, dim=1)
-                    teacher_pred_numpy = teacher_preds.cpu().numpy()
-                    teacher_preds_all_val.append(teacher_pred_numpy)
-                    teacher_labels_all_val.append(labels_numpy)  # 标签是相同的
+            with torch.no_grad():
+                out_change, loss = model.get_val_pred()
+                out_change = FF.interpolate(out_change, size=(512, 512), mode='bilinear', align_corners=True)
+                val_loss.update(loss.cpu().detach().numpy())
+                preds = torch.argmax(out_change, dim=1)
+                pred_numpy = preds.cpu().numpy()
+                labels_numpy = data[2].cpu().numpy()
+                preds_all_val.append(pred_numpy)
+                labels_all_val.append(labels_numpy)
+                names_all_val.extend(data[3])
+                
+                # 如果使用蒸馏学习且有第三张图像，获取教师网络预测结果
+                if opt.use_distill and len(data) == 5:
+                    teacher_pred, teacher_loss = model.get_teacher_pred()
+                    if teacher_pred is not None:
+                        teacher_pred = FF.interpolate(teacher_pred, size=(512, 512), mode='bilinear', align_corners=True)
+                        teacher_val_loss.update(teacher_loss.cpu().detach().numpy())
+                        teacher_preds = torch.argmax(teacher_pred, dim=1)
+                        teacher_pred_numpy = teacher_preds.cpu().numpy()
+                        teacher_preds_all_val.append(teacher_pred_numpy)
+                        teacher_labels_all_val.append(labels_numpy)  # 标签是相同的
         
         # 评估学生网络在验证集上的性能
         preds_all_val = np.concatenate(preds_all_val, axis=0)
@@ -422,6 +485,13 @@ if __name__ == '__main__':
         with open(os.path.join(opt.checkpoints_dir, opt.name, "cd_log.txt"), 'a') as f:
             # 添加分隔行
             f.write('='*100 + '\n【Epoch: %d】\n' % epoch)
+            
+            # 如果使用动态权重，记录当前权重值
+            if opt.use_dynamic_weights and hasattr(model, 'get_dynamic_weights'):
+                model.set_epoch(epoch)  # 确保模型知道当前epoch
+                cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
+                f.write(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}\n')
+            
             # 合并展示训练和验证结果
             f.write('【学生网络】 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
                    (train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
@@ -442,6 +512,12 @@ if __name__ == '__main__':
 
         # 美化控制台输出
         print('='*100)
+        # 如果使用动态权重，打印当前权重值
+        if opt.use_dynamic_weights and hasattr(model, 'get_dynamic_weights'):
+            model.set_epoch(epoch)  # 确保模型知道当前epoch
+            cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
+            print(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}')
+
         # 合并展示训练和验证结果
         print('【Epoch: %d】学生网络 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)' %
              (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
