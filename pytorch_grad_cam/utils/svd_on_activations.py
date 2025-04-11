@@ -6,7 +6,7 @@ def get_2d_projection(activation_batch):
     activation_batch[np.isnan(activation_batch)] = 0
     projections = []
     for activations in activation_batch:
-        reshaped_activations = (activations).reshape(
+        reshaped_activations = activations.reshape(
             activations.shape[0], -1).transpose()
         # Centering before the SVD seems to be important here,
         # Otherwise the image returned is negative

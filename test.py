@@ -1,24 +1,22 @@
 import os
-import numpy as np
-import torch.nn as nn
-import torch.autograd
+
 from torch.utils.data import DataLoader
+
+from models.HeteCD import TripleHeteCD
 from options.train_options import TrainOptions
-from models import create_model
-from models.HeteGAN import Pix2PixModel
+
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,3'
 from datasets import dataset
 from datasets.dataset import *
 from utils.util import *
 # 生成一个随机5位整数
-import math
 
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()   # get training options
     val_set = dataset.Data('val',img_transform=None, root = opt.dataroot)
     val_loader = DataLoader(val_set, batch_size=1, num_workers=8, shuffle=False)
-    model = Pix2PixModel(opt, is_train=False)
+    model = TripleHeteCD(opt, is_train=False)
     model.setup(opt)
     model.load_weights("checkpoints/resunet_dual_out_mask/80_net_G.pth")
     pred_dir = "preds"

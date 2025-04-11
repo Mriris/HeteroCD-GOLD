@@ -42,7 +42,7 @@ def save_images(webpage, visuals, image_path, aspect_ratio=1.0, width=256):
     webpage.add_images(ims, txts, links, width=width)
 
 
-class Visualizer():
+class Visualizer:
     """此类包含几个可以显示/保存图像和打印/保存日志信息的函数。
 
     它使用Python库'visdom'进行显示，并使用Python库'dominate'（封装在'HTML'中）创建带有图像的HTML文件。

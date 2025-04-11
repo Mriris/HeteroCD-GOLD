@@ -2,7 +2,7 @@ import torch
 import argparse
 
 
-class TrainOptions():
+class TrainOptions:
     """这个类包含训练选项。
 
     它还包括在BaseOptions中定义的共享选项。
@@ -10,9 +10,9 @@ class TrainOptions():
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
+        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='muagan_dynamic5',
+        parser.add_argument('--name', type=str, default='muagan_test',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='1,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')

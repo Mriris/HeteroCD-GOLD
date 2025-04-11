@@ -1,9 +1,8 @@
-import torch
-import numpy as np
 from typing import List, Callable
 
-import numpy as np
 import cv2
+import numpy as np
+import torch
 
 
 class PerturbationConfidenceMetric:

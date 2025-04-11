@@ -1,28 +1,24 @@
+import argparse
 import os
 import time
-import argparse
-import numpy as np
-import torch
-from skimage import io, exposure
-from torch.nn import functional as F
-from torch.utils.data import DataLoader
-from datasets import dataset
-from models.DualEUNet import DualEUNet
+
 import cv2
-import torch.nn.functional as FF
-from torchvision import transforms
-from utils.util import accuracy, SCDD_eval_all, AverageMeter, get_confuse_matrix, cm2score
-import cv2
-from scipy.spatial.distance import euclidean
-from scipy.stats import entropy, wasserstein_distance
-from scipy.special import rel_entr
 import seaborn as sns
+import torch.nn.functional as FF
+from scipy.spatial.distance import euclidean
+from scipy.special import rel_entr
+from scipy.stats import entropy, wasserstein_distance
+from skimage import io
+from torchvision import transforms
+
+from models.DualEUNet import DualEUNet
+from utils.util import get_confuse_matrix, cm2score
+
 DATA_NAME = 'ST'
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+
 
 # 输入：两个BCHW张量
 def visualize_features(tensor1, tensor2, output_filename, sample_size=10000):
@@ -134,7 +130,7 @@ def compute_feature_distances(tensor1, tensor2):
     }
 
     return results
-class PredOptions():
+class PredOptions:
     def __init__(self):
         self.initialized = False
 

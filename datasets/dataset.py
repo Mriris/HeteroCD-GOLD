@@ -1,19 +1,17 @@
 import os
+import random
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from skimage import io
-from torch.utils import data
-import matplotlib.pyplot as plt
-from skimage.transform import rescale
-from torchvision.transforms import functional as F
-import random
 from PIL import Image
 from PIL import ImageFilter
-from torchvision import transforms
-# from osgeo import gdal_array
-import cv2
-from skimage import io, img_as_float
 from scipy.ndimage import uniform_filter
+# from osgeo import gdal_array
+from skimage import io, img_as_float
+from torch.utils import data
+from torchvision import transforms
+from torchvision.transforms import functional as F
 
 MEAN_A = np.array([113.40, 114.08, 116.45])
 STD_A = np.array([48.30, 46.27, 48.14])
@@ -321,7 +319,7 @@ def __crop(img, pos, size):
     ow, oh = img.size
     x1, y1 = pos
     tw = th = size
-    if (ow > tw or oh > th):
+    if ow > tw or oh > th:
         return img.crop((x1, y1, x1 + tw, y1 + th))
     return img
 

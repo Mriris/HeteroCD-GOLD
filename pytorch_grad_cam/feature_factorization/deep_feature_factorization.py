@@ -1,8 +1,10 @@
+from typing import Callable, Optional
+
 import numpy as np
-from PIL import Image
 import torch
-from typing import Callable, List, Tuple, Optional
+from PIL import Image
 from sklearn.decomposition import NMF
+
 from pytorch_grad_cam.activations_and_gradients import ActivationsAndGradients
 from pytorch_grad_cam.utils.image import scale_cam_image, create_labels_legend, show_factorization_on_image
 

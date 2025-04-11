@@ -1,22 +1,15 @@
-import os
 import time
-import random
-import numpy as np
-import torch.nn as nn
-import torch.autograd
-from skimage import io
-from torch import optim
-import cv2
 
+import cv2
+import torch.autograd
+import torch.multiprocessing
 from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
-from options.train_options import TrainOptions
-from models import create_model
-from models.HeteGAN import Pix2PixModel
-from utils.visualizer import Visualizer
-from utils.util import accuracy, SCDD_eval_all, AverageMeter, get_confuse_matrix, cm2score
 
-import torch.multiprocessing
+from models.HeteCD import TripleHeteCD
+from options.train_options import TrainOptions
+from utils.util import AverageMeter, get_confuse_matrix, cm2score
+from utils.visualizer import Visualizer
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -55,7 +48,7 @@ if __name__ == '__main__':
     
     # 创建模型，设置use_distill=True启用蒸馏学习
     opt.use_distill = True  # 启用蒸馏学习
-    model = Pix2PixModel(opt, is_train=True)
+    model = TripleHeteCD(opt, is_train=True)
     
     # 添加断点续训功能：恢复之前的训练状态
     resume_epoch = 0

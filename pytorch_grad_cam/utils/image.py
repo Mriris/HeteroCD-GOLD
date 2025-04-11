@@ -1,12 +1,11 @@
-import matplotlib
-from matplotlib import pyplot as plt
-from matplotlib.lines import Line2D
+from typing import List, Dict
+
 import cv2
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 from torchvision.transforms import Compose, Normalize, ToTensor
-from typing import List, Dict
-import math
 
 
 def preprocess_image(

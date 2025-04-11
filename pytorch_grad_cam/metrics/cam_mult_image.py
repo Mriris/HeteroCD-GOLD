@@ -1,6 +1,6 @@
-import torch
 import numpy as np
-from typing import List, Callable
+import torch
+
 from pytorch_grad_cam.metrics.perturbation_confidence import PerturbationConfidenceMetric
 
 

@@ -1,19 +1,14 @@
 import os
 import time
-import random
-import numpy as np
-import torch.nn as nn
-import torch.autograd
-from skimage import io
-from torch import optim
 
-from tensorboardX import SummaryWriter
+import torch.autograd
 from torch.utils.data import DataLoader
+
+from models.HeteCD import TripleHeteCD
 from options.train_options import TrainOptions
-from models import create_model
-from models.HeteGAN import Pix2PixModel
+from utils.util import AverageMeter, get_confuse_matrix, cm2score
 from utils.visualizer import Visualizer
-from utils.util import accuracy, SCDD_eval_all, AverageMeter, get_confuse_matrix, cm2score
+
 os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
 #Data and model choose
 torch.set_num_threads(4)
@@ -49,7 +44,7 @@ if __name__ == '__main__':
     dataset_size = len(train_loader_change)
     val_set = dataset.Data('val',img_transform, root = opt.dataroot)
     val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=8, shuffle=False,drop_last=True)
-    model = Pix2PixModel(opt, is_train=True)
+    model = TripleHeteCD(opt, is_train=True)
     model.setup(opt)
     visualizer = Visualizer(opt)
     total_iters = 0 
@@ -80,7 +75,7 @@ if __name__ == '__main__':
             labels_all.append(labels_numpy)
             names_all.extend(data[3])
             # print(cd_pred)
-            if epoch < (opt.n_epochs_gen):
+            if epoch < opt.n_epochs_gen:
                 if total_iters % opt.display_freq == 0:   # display images on visdom and save images to a HTML file
                     save_result = total_iters % opt.update_html_freq == 0
                     model.compute_visuals()

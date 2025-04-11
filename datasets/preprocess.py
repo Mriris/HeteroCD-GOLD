@@ -1,12 +1,10 @@
-import os
 import argparse
-import numpy as np
+import glob
+import math
+import os
+
 from PIL import Image, ImageOps
 from tqdm import tqdm
-import glob
-from pathlib import Path
-import math
-import random
 
 # 设置默认参数
 DEFAULT_INPUT_DIR = "/data/jingwei/yantingxuan/Datasets/Final"  # 输入目录

@@ -29,7 +29,7 @@ def pixel_accuracy(eval_segm, gt_segm):
         sum_n_ii += np.sum(np.logical_and(curr_eval_mask, curr_gt_mask))
         sum_t_i  += np.sum(curr_gt_mask)
  
-    if (sum_t_i == 0):
+    if sum_t_i == 0:
         pixel_accuracy_ = 0
     else:
         pixel_accuracy_ = sum_n_ii / sum_t_i
@@ -55,7 +55,7 @@ def mean_accuracy(eval_segm, gt_segm):
         n_ii = np.sum(np.logical_and(curr_eval_mask, curr_gt_mask))
         t_i  = np.sum(curr_gt_mask)
  
-        if (t_i != 0):
+        if t_i != 0:
             accuracy[i] = n_ii / t_i
 
     mean_accuracy_ = np.mean(accuracy)

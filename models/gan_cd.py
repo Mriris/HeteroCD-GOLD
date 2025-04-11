@@ -1,8 +1,8 @@
-import torch
-from .base_model import BaseModel
-from . import networks
 from .DualEUNet import DualEUNet
+from .base_model import BaseModel
 from .loss import *
+
+
 class Pix2PixModel(BaseModel):
     """ This class implements the pix2pix model, for learning a mapping from input images to output images given paired data.
 
@@ -13,6 +13,7 @@ class Pix2PixModel(BaseModel):
 
     pix2pix paper: https://arxiv.org/pdf/1611.07004.pdf
     """
+
     # @staticmethod
     # def modify_commandline_options(parser, is_train=True):
     #     """Add new dataset-specific options, and rewrite default values for existing options.
@@ -28,7 +29,6 @@ class Pix2PixModel(BaseModel):
     #     The training objective is: GAN Loss + lambda_L1 * ||G(A)-B||_1
     #     By default, we use vanilla GAN loss, UNet with batchnorm, and aligned datasets.
     #     """
-
 
     #     return parser
 
@@ -53,13 +53,13 @@ class Pix2PixModel(BaseModel):
         else:  # during test time, only load G
             self.model_names = ['G']
         # define networks (both generator and discriminator)
-        self.netG = DualEUNet(opt.input_nc,opt.output_nc)
+        self.netG = DualEUNet(opt.input_nc, opt.output_nc)
         # im                  = torch.zeros(1, 3, 256,256).to('cpu')  # image size(1, 3, 512, 512) BCHW
         # input_layer_names   = ["images"]
         # output_layer_names  = ["output"]
-        
+
         # # Export the model
-        
+
         # torch.onnx.export(self.netG,
         #                 im,
         #                 f               = "bbb.onnx",
@@ -78,12 +78,12 @@ class Pix2PixModel(BaseModel):
         self.is_train = is_train
         if is_train:
             self.netG = torch.nn.DataParallel(self.netG, opt.gpu_ids)  # multi-GPUs
-        
+
         # self.netG = networks.define_G(opt.input_nc, opt.output_nc, 64, "unet_256", "batch",
         #                               not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:  # define a discriminator; conditional GANs need to take both input and output images; Therefore, #channels for D is input_nc + output_nc
-            self.netD = networks.define_D(opt.input_nc*2, opt.ndf, opt.netD,
+            self.netD = networks.define_D(opt.input_nc * 2, opt.ndf, opt.netD,
                                           opt.n_layers_D, "batch", opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:
@@ -92,14 +92,15 @@ class Pix2PixModel(BaseModel):
             self.criterionL1 = torch.nn.L1Loss()
             self.criterionCosine = torch.nn.CosineSimilarity(dim=1)
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
-            self.optimizer_G = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.netG.parameters()), lr=opt.lr, betas=(0.9, 0.999),weight_decay=0.01 )
+            self.optimizer_G = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.netG.parameters()), lr=opt.lr,
+                                                 betas=(0.9, 0.999), weight_decay=0.01)
             self.optimizer_CD = torch.optim.AdamW(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.AdamW(self.netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
             # self.optimizers.append(self.optimizer_CD)
 
-    def set_input(self, A, B, label, name,device):
+    def set_input(self, A, B, label, name, device):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
         Parameters:
@@ -107,7 +108,7 @@ class Pix2PixModel(BaseModel):
 
         The option 'direction' can be used to swap images in domain A and domain B.
         """
-    
+
         self.opt_img = A.to(device)
         self.sar_img = B.to(device)
         self.label = label.to(device)
@@ -124,15 +125,13 @@ class Pix2PixModel(BaseModel):
         self.netG.load_state_dict(checkpoint)
         if not self.isTrain:
             self.netG.eval()
-            
-        
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        [self.fake_B, self.fake_BB] = self.netG(self.real_A,self.real_B)  # G(A)
+        [self.fake_B, self.fake_BB] = self.netG(self.real_A, self.real_B)  # G(A)
 
     def forward_CD(self):
-        self.change_pred = self.netG(self.opt_img,self.sar_img)  # G(A)
+        self.change_pred = self.netG(self.opt_img, self.sar_img)  # G(A)
         # if self.is_train:
         #     # print(self.label.size(),self.opt_gen.size())
         #     mask = F.interpolate(self.label.unsqueeze(1), size=(self.opt_gen.size(2),self.opt_gen.size(3)), mode='nearest')
@@ -140,25 +139,27 @@ class Pix2PixModel(BaseModel):
         #     self.fake_BB = self.sar_gen*(1-mask)
         #     self.real_B = F.interpolate(self.sar_img, size=(self.opt_gen.size(2),self.opt_gen.size(3)), mode='nearest')*(1-mask)
         #     self.real_A = F.interpolate(self.opt_img, size=(self.opt_gen.size(2),self.opt_gen.size(3)), mode='nearest')*(1-mask)
+
     def get_val_pred(self):
         self.netG.eval()
         self.is_train = False
         with torch.no_grad():
             self.forward_CD()
             cls_weights = torch.tensor([0.2, 0.8]).cuda()
-            loss_bn = CE_Loss(self.change_pred, self.label,cls_weights)
+            loss_bn = CE_Loss(self.change_pred, self.label, cls_weights)
         self.is_train = True
         return self.change_pred, loss_bn
-
 
     def backward_D(self):
         """Calculate GAN loss for the discriminator"""
 
-        fake_AB = torch.cat((self.real_A, self.fake_B), 1)  # we use conditional GANs; we need to feed both input and output to the discriminator
+        fake_AB = torch.cat((self.real_A, self.fake_B),
+                            1)  # we use conditional GANs; we need to feed both input and output to the discriminator
         pred_fake = self.netD(fake_AB.detach())
-        fake_ABB = torch.cat((self.real_A, self.fake_BB), 1)  # we use conditional GANs; we need to feed both input and output to the discriminator
+        fake_ABB = torch.cat((self.real_A, self.fake_BB),
+                             1)  # we use conditional GANs; we need to feed both input and output to the discriminator
         pred_fakeB = self.netD(fake_ABB.detach())
-        self.loss_D_fake = (self.criterionGAN(pred_fake, False) + self.criterionGAN(pred_fakeB, False))/2
+        self.loss_D_fake = (self.criterionGAN(pred_fake, False) + self.criterionGAN(pred_fakeB, False)) / 2
         # Real
         real_AB = torch.cat((self.real_A, self.real_B), 1)
         pred_real = self.netD(real_AB)
@@ -167,7 +168,6 @@ class Pix2PixModel(BaseModel):
         # combine loss and calculate gradients
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
         self.loss_D.backward()
-
 
         # mask = F.interpolate(self.label.unsqueeze(1), size=(self.opt_gen.size(2),self.opt_gen.size(3)), mode='nearest')
         # self.fake_B = self.opt_gen*(1-mask)
@@ -193,24 +193,26 @@ class Pix2PixModel(BaseModel):
         # # self.loss_G_L1 = (1-self.criterionCosine (self.fake_B, self.real_B) + 1-self.criterionCosine (self.fake_BB, self.real_B))/2
         # # combine loss and calculate gradients
         # self.loss_G = self.loss_G_GAN + self.loss_G_L1
-        self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2),self.opt_img.size(3)), mode='bilinear', align_corners=True)
+        self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2), self.opt_img.size(3)),
+                                         mode='bilinear', align_corners=True)
         cls_weights = torch.tensor([0.2, 0.8]).cuda()
         self.label = self.label.long()
-        self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)*100 + Dice_loss(self.change_pred, self.label)*100
+        self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights) * 100 + Dice_loss(
+            self.change_pred, self.label) * 100
 
         # combine loss and calculate gradients
         self.loss_G = self.loss_CD
         self.loss_G.backward()
 
     def backward_CD(self):
-        """Calculate GAN and L1 loss for the generator"""  
+        """Calculate GAN and L1 loss for the generator"""
         cls_weights = torch.tensor([1.0, 1.0]).cuda()
         self.loss_CD = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)
         self.loss_CD.backward()
 
-    def optimize_parameters(self,epoch):
+    def optimize_parameters(self, epoch):
         self.netG.train()
-        self.forward_CD()  
+        self.forward_CD()
         # self.epoch = epoch                 # compute fake images: G(A)
         # # update D
         # self.set_requires_grad(self.netD, True)  # enable backprop for D
@@ -219,11 +221,11 @@ class Pix2PixModel(BaseModel):
         # self.optimizer_D.step()          # update D's weights
         # update G
         self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
-        self.optimizer_G.zero_grad()        # set G's gradients to zero
-        self.backward_G()                   # calculate graidents for G
+        self.optimizer_G.zero_grad()  # set G's gradients to zero
+        self.backward_G()  # calculate graidents for G
         self.optimizer_G.step()
-        return self.change_pred       
-    # def optimize_parameters(self,epoch):
+        return self.change_pred
+        # def optimize_parameters(self,epoch):
     #     self.epoch = epoch
     #     self.forward_CD()
     #     # self.set_requires_grad(self.netG.module.cd_decoder, False)
@@ -232,16 +234,16 @@ class Pix2PixModel(BaseModel):
     #     # self.backward_D()                # calculate gradients for D
     #     # self.optimizer_D.step()          # update D's weights
     #     # update G
-        
+
     #     self.set_requires_grad(self.netD, False)  # D requires no gradients when optimizing G
     #     self.optimizer_G.zero_grad()        # set G's gradients to zero
     #     self.backward_G()                 # calculate graidents for G
     #     self.optimizer_G.step()             # update G's weights
-            # freeze the decoder
-            # self.optimizer_CD.zero_grad()
-            # self.backward_CD()   
-            # self.optimizer_CD.step()
-        # self.optimizer_CD.step()
+    # freeze the decoder
+    # self.optimizer_CD.zero_grad()
+    # self.backward_CD()
+    # self.optimizer_CD.step()
+    # self.optimizer_CD.step()
     # def forward(self):
     #     """Run forward pass; called by both functions <optimize_parameters> and <test>."""
     #     # [self.fake_B1,self.fake_B2] = self.netG(self.real_A,self.real_B)  # G(A)

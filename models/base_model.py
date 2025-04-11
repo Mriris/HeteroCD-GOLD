@@ -216,7 +216,7 @@ class BaseModel(ABC):
         for name in self.model_names:
             if isinstance(name, str):
                 if save_best:
-                    save_filename = 'best_net_%s.pth' % (name)
+                    save_filename = 'best_net_%s.pth' % name
                 else:
                     save_filename = '%s_net_%s.pth' % (epoch, name)
                 save_path = os.path.join(self.save_dir, save_filename)

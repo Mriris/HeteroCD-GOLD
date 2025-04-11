@@ -1,13 +1,15 @@
 """本模块包含一些简单的辅助函数"""
 from __future__ import print_function
-import torch
-import numpy as np
-from PIL import Image
-import os
+
 import math
+import os
 import random
+
 import numpy as np
+import torch
+from PIL import Image
 from scipy import stats
+
 from utils import eval_segm as seg_acc
 
 
@@ -64,8 +66,8 @@ def seprate_batch(dataset, batch_size):
     batches = []
     for i in range(num_batch):
         batches.append([dataset[j] for j in range(batch_len)])
-        if (i + 2 == num_batch): batch_len = len(dataset) - (num_batch - 1) * batch_size
-    return (batches)
+        if i + 2 == num_batch: batch_len = len(dataset) - (num_batch - 1) * batch_size
+    return batches
 
 
 def split_train_val(dataset, val_percent=0.05):
@@ -412,7 +414,7 @@ def intersectionAndUnion(imPred, imLab, numClass):
     # print(area_pred)
     # print(area_lab)
 
-    return (area_intersection, area_union)
+    return area_intersection, area_union
 
 
 def CaclTP(imPred, imLab, numClass):
@@ -447,7 +449,7 @@ def CaclTP(imPred, imLab, numClass):
     # print(area_pred)
     # print(area_lab)
 
-    return (TP_hist, pred_hist, lab_hist)
+    return TP_hist, pred_hist, lab_hist
 
 
 def tensor2im(input_image, imtype=np.uint8):
