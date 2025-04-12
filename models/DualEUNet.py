@@ -664,6 +664,96 @@ class FrequencyEnh(nn.Module):
         return torch.sqrt(channel_att_layer(mask_fft.real) ** 2 + channel_att_layer(mask_fft.imag) ** 2 + 1e-8)
 
 
+class BidirectionalChannelAttention(nn.Module):
+    """双向通道注意力融合模块
+    
+    通过交换融合光学和SAR特征的注意力权重，增强两种异质模态之间的信息交互
+    
+    参数:
+        in_channels (int): 输入通道数
+        reduction_ratio (int): 注意力机制中的通道缩减比例
+    """
+    def __init__(self, in_channels, reduction_ratio=16):
+        super(BidirectionalChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 共享MLP层用于特征压缩和通道注意力计算
+        self.shared_mlp = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // reduction_ratio, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // reduction_ratio, in_channels, 1, bias=False)
+        )
+        
+        # 使用另一个MLP学习模态特定的注意力调整
+        self.specific_mlp = nn.Sequential(
+            nn.Conv2d(in_channels * 2, in_channels // reduction_ratio, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // reduction_ratio, in_channels, 1, bias=False)
+        )
+        
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x1, x2):
+        """前向传播
+        
+        参数:
+            x1 (tensor): 第一个特征图（通常是光学特征）
+            x2 (tensor): 第二个特征图（通常是SAR特征）
+            
+        返回:
+            tuple: (增强后的x1特征, 增强后的x2特征)
+        """
+        # 保存原始特征用于残差连接
+        x1_orig = x1
+        x2_orig = x2
+        
+        # 第一个分支特征的注意力权重
+        x1_avg = self.avg_pool(x1)
+        x1_max = self.max_pool(x1)
+        
+        x1_avg_weight = self.shared_mlp(x1_avg)
+        x1_max_weight = self.shared_mlp(x1_max)
+        
+        # 第二个分支特征的注意力权重
+        x2_avg = self.avg_pool(x2)
+        x2_max = self.max_pool(x2)
+        
+        x2_avg_weight = self.shared_mlp(x2_avg)
+        x2_max_weight = self.shared_mlp(x2_max)
+        
+        # 基础注意力权重
+        x1_weight = self.sigmoid(x1_avg_weight + x1_max_weight)
+        x2_weight = self.sigmoid(x2_avg_weight + x2_max_weight)
+        
+        # 模态交互学习 - 结合两种模态的注意力信息
+        # 拼接平均池化和最大池化结果
+        x_combined_avg = torch.cat([x1_avg, x2_avg], dim=1)
+        x_combined_max = torch.cat([x1_max, x2_max], dim=1)
+        
+        # 通过特定MLP学习交互注意力
+        x_combined_avg_weight = self.specific_mlp(x_combined_avg)
+        x_combined_max_weight = self.specific_mlp(x_combined_max)
+        
+        # 计算混合注意力
+        x_combined_weight = self.sigmoid(x_combined_avg_weight + x_combined_max_weight)
+        
+        # 双向增强 - 交换注意力
+        # 使用第二个模态的注意力权重来增强第一个模态的特征，反之亦然
+        x1_enhanced = x1 * x2_weight
+        x2_enhanced = x2 * x1_weight
+        
+        # 添加共享注意力组件
+        x1_enhanced = x1_enhanced + x1 * x_combined_weight
+        x2_enhanced = x2_enhanced + x2 * x_combined_weight
+        
+        # 残差连接
+        x1_enhanced = x1_enhanced + x1_orig
+        x2_enhanced = x2_enhanced + x2_orig
+        
+        return x1_enhanced, x2_enhanced
+
+
 class DualEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
         """双分支EUNet网络
@@ -791,8 +881,8 @@ class DualEUNet(nn.Module):
     def forward(self, x1, x2, x3=None, is_training=True):
         """网络前向传播
         参数:
-            x1 (Tensor): 光学图像输入
-            x2 (Tensor): SAR图像输入
+            x1 (Tensor): 光学图像输入 (时间点1)
+            x2 (Tensor): SAR图像输入 (时间点2)
             x3 (Tensor, optional): 时间点2的光学图像，用于TripleEUNet（此处不使用）
             is_training (bool): 是否处于训练模式（此处不使用）
         """
@@ -815,61 +905,48 @@ class DualEUNet(nn.Module):
 
 class TripleEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
-        """三分支EUNet网络
+        """三分支EUNet网络，用于异源遥感图像变化检测
         参数:
             n_channels (int): 输入通道数
             n_classes (int): 输出类别数
             bilinear (bool): 是否使用双线性插值上采样
         """
         super(TripleEUNet, self).__init__()
-        # 分支1: 时间点1的光学图像编码器
+        # 光学图像编码器1 - 时间点1
         self.encoder_opt1 = resnet18()
-        # 分支2: 时间点2的SAR图像编码器 (学生网络)
+        # SAR图像编码器 - 时间点2 (学生网络)
         self.encoder_sar = resnet18()
-        # 分支3: 时间点2的光学图像编码器 (教师网络)
+        # 光学图像编码器2 - 时间点2 (教师网络)
         self.encoder_opt2 = resnet18()
-        
         # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
         
         # 特征融合相关参数和层
-        self.convs1 = nn.ModuleList()  # 分支1的特征转换模块
-        self.convs2 = nn.ModuleList()  # 分支2的特征转换模块
-        self.convs3 = nn.ModuleList()  # 分支3的特征转换模块
+        self.convs1 = nn.ModuleList()
+        self.convs2 = nn.ModuleList()
+        self.convs3 = nn.ModuleList()
         
         self.in_channels = [64, 128, 256, 512]
         self.channels = 128
         
-        # 光学-光学特征融合卷积层 (分支1到分支3)
+        # 特征融合卷积层
         self.fusion_conv1 = nn.Sequential(
             nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
             nn.BatchNorm2d(self.channels),
         )
-        # SAR特征融合卷积层 (分支2)
         self.fusion_conv2 = nn.Sequential(
             nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
             nn.BatchNorm2d(self.channels),
         )
-        # 光学特征融合卷积层 (分支3-教师网络)
         self.fusion_conv3 = nn.Sequential(
             nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
             nn.BatchNorm2d(self.channels),
         )
         
-        # 分割输出层
-        self.conv_seg = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
-        self.conv_seg_teacher = nn.Conv2d(self.channels * 2, 2, kernel_size=1)
+        # 新增：双向通道注意力融合模块
+        self.bidirectional_attention = BidirectionalChannelAttention(self.channels, reduction_ratio=16)
         
-        # 差异图生成模块
-        self.diff_attention = nn.Sequential(
-            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(self.channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(self.channels, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
-        
-        # 特征转换卷积层 - 分支1
+        # 特征融合卷积层
         for i in range(len(self.in_channels)):
             self.convs1.append(
                 nn.Sequential(
@@ -878,8 +955,6 @@ class TripleEUNet(nn.Module):
                     nn.ReLU()
                 )
             )
-        # 特征转换卷积层 - 分支2
-        for i in range(len(self.in_channels)):
             self.convs2.append(
                 nn.Sequential(
                     nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
@@ -887,8 +962,6 @@ class TripleEUNet(nn.Module):
                     nn.ReLU()
                 )
             )
-        # 特征转换卷积层 - 分支3
-        for i in range(len(self.in_channels)):
             self.convs3.append(
                 nn.Sequential(
                     nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
@@ -897,12 +970,34 @@ class TripleEUNet(nn.Module):
                 )
             )
         
-        # 注意力和增强模块
-        self.atten = self._make_channel_att_layer(compress_ratio=16)
+        # 分割输出层
+        self.conv_seg = nn.Sequential(
+            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
+            nn.ReLU(),
+            nn.Conv2d(self.channels, n_classes, kernel_size=1)
+        )
         
-        # 特征融合和判别器FFN
+        # 教师网络分割输出层 - 使用与学生网络相同的初始化方法
+        self.conv_seg_teacher = nn.Sequential(
+            nn.Conv2d(self.channels * 2, self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
+            nn.ReLU(),
+            nn.Conv2d(self.channels, n_classes, kernel_size=1)
+        )
+        
+        # 确保权重正确初始化 - 复制学生网络权重到教师网络
+        # 这样可以确保教师网络的初始性能与学生网络类似
+        self.conv_seg_teacher[0].weight.data.copy_(self.conv_seg[0].weight.data)
+        self.conv_seg_teacher[0].bias.data.copy_(self.conv_seg[0].bias.data)
+        self.conv_seg_teacher[1].weight.data.copy_(self.conv_seg[1].weight.data)
+        self.conv_seg_teacher[1].bias.data.copy_(self.conv_seg[1].bias.data)
+        self.conv_seg_teacher[3].weight.data.copy_(self.conv_seg[3].weight.data)
+        self.conv_seg_teacher[3].bias.data.copy_(self.conv_seg[3].bias.data)
+        
+        # 学生判别器
         self.student_discriminator = MixFFN(
-            embed_dims=self.channels * 2,  # 因为输入是out1和out2的拼接，所以通道数是2倍
+            embed_dims=self.channels * 2,  # 输入通道数是两个特征的拼接
             feedforward_channels=self.channels * 2,
             ffn_drop=0.,
             dropout_layer=dict(type='DropPath', drop_prob=0.),
@@ -1059,7 +1154,8 @@ class TripleEUNet(nn.Module):
             feat (Tensor): 输入特征
         """
         if self.dropout is not None:
-            feat = self.dropout(feat)
+            # 训练时使用较低的dropout，避免过度正则化
+            feat = F.dropout(feat, p=0.05, training=self.training)
         output = self.conv_seg_teacher(feat)
         return output
 
@@ -1070,17 +1166,26 @@ class TripleEUNet(nn.Module):
             x2 (Tensor): SAR图像输入 (时间点2)
             x3 (Tensor, optional): 光学图像输入 (时间点2)，用作教师网络输入
             is_training (bool): 是否处于训练模式
+        返回:
+            如果is_training=True且提供了x3:
+                tuple: (学生网络输出, 教师网络输出, 学生网络增强特征, 教师网络增强特征, 
+                       学生网络中间特征, 教师网络中间特征, 光学t1特征, 光学t2特征, SAR t2特征)
+            否则:
+                tensor: 学生网络输出
         """
         # 编码器特征提取
         x_opt1 = self.encoder_opt1(x1)  # 分支1: 时间点1的光学图像
         x_sar = self.encoder_sar(x2)    # 分支2: 时间点2的SAR图像 (学生网络)
         
         # 特征融合 - 学生网络 (光学-SAR)
-        out1 = self.base_forward1(x_opt1[1:])
-        out2, student_features = self.base_forward2(x_sar[1:])
+        out1 = self.base_forward1(x_opt1[1:])  # 光学特征
+        out2, student_features = self.base_forward2(x_sar[1:])  # SAR特征
         
-        # 预先分配空间来存储拼接后的特征
-        student_concat = torch.cat([out1, out2], dim=1)
+        # 使用双向通道注意力融合模块增强特征交互
+        enhanced_out1, enhanced_out2 = self.bidirectional_attention(out1, out2)
+        
+        # 使用增强后的特征
+        student_concat = torch.cat([enhanced_out1, enhanced_out2], dim=1)
         
         # 生成学生网络的差异图注意力
         student_diff_attention = self.student_diff_module(student_concat)
@@ -1103,26 +1208,26 @@ class TripleEUNet(nn.Module):
         # 特征融合 - 教师网络 (光学-光学)
         out3, teacher_features = self.base_forward3(x_opt2[1:])
         
-        # 预先分配空间来存储拼接后的特征
-        teacher_concat = torch.cat([out1, out3], dim=1)
+        # 使用双向通道注意力融合模块增强特征交互 - 教师网络
+        # 确保梯度不会流入到out1，因为教师网络不应该影响光学图1的编码
+        enhanced_out1_teacher, enhanced_out3 = self.bidirectional_attention(out1.detach(), out3)
+        
+        # 使用增强后的特征
+        teacher_concat = torch.cat([enhanced_out1_teacher, enhanced_out3], dim=1)
         
         # 生成教师网络的差异图注意力
         teacher_diff_attention = self.teacher_diff_module(teacher_concat)
         
-        # 应用差异图注意力到教师网络特征 - 直接拼接
+        # 应用差异图注意力到教师网络特征
         teacher_out_with_attention = torch.cat([teacher_concat, teacher_diff_attention], dim=1)
         teacher_enhanced = self.teacher_fusion(teacher_out_with_attention)
         
-        # 教师网络分割输出
+        # 教师网络输出
         teacher_out = self.cls_seg_teacher(teacher_enhanced)
         
-        # 保存原始特征，用于差异图注意力迁移损失计算
-        opt_t1_feat = out1
-        opt_t2_feat = out3
-        sar_t2_feat = out2
-        
-        # 同时返回原始特征，用于差异图注意力迁移损失计算
-        return student_out, teacher_out, student_enhanced, teacher_enhanced, student_features, teacher_features, opt_t1_feat, opt_t2_feat, sar_t2_feat
+        # 返回完整结果以供训练
+        return student_out, teacher_out, student_enhanced, teacher_enhanced, \
+               student_concat, teacher_concat, out1, out3, out2
 
 
 if __name__ == '__main__':

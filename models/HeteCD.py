@@ -38,7 +38,7 @@ class TripleHeteCD(BaseModel):
         # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
         self.loss_names = ['CD']  # 基础损失名称
         if self.use_distill:
-            self.loss_names.extend(['Distill', 'Diff_Att'])
+            self.loss_names.extend(['Distill', 'Diff_Att', 'Teacher'])  # 添加Teacher损失到损失名称列表
             if self.use_dynamic_weights:
                 self.loss_names.append('Dynamic_Weight')
                 # 初始化权重不确定性参数 (可学习参数)
@@ -273,8 +273,16 @@ class TripleHeteCD(BaseModel):
         ce_loss = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)
         dice_loss = Dice_loss(self.change_pred, self.label)
 
+        # 增强变化区域的权重
+        # 创建变化区域掩码
+        change_mask = (self.label == 1).float()
+        # 计算当前批次中变化区域的比例
+        change_ratio = change_mask.sum() / (change_mask.size(0) * change_mask.size(1) * change_mask.size(2))
+        # 根据变化区域比例动态调整Dice损失权重 - 变化区域越少，权重越高
+        dynamic_dice_weight = 150.0 + 50.0 * (1.0 - change_ratio)
+        
         # 添加手动类别重要性调整，进一步关注变化区域
-        self.loss_CD = ce_loss * 100 + dice_loss * 150  # 增加Dice损失权重，因为它对小区域更敏感
+        self.loss_CD = ce_loss * 100 + dice_loss * dynamic_dice_weight  # 使用动态Dice损失权重
 
         # 初始化蒸馏损失和差异图注意力损失为0
         self.loss_Distill = torch.tensor(0.0).cuda()
@@ -293,6 +301,24 @@ class TripleHeteCD(BaseModel):
                 mode='bilinear',
                 align_corners=True
             )
+            
+            # 为教师网络也计算CE和Dice损失，用于监控教师网络性能
+            teacher_ce_loss = CE_Loss(teacher_out_resized, self.label, cls_weights=cls_weights)
+            teacher_dice_loss = Dice_loss(teacher_out_resized, self.label)
+            self.teacher_loss = teacher_ce_loss * 100 + teacher_dice_loss * dynamic_dice_weight
+            
+            # 确保教师输出质量，适当降低不确定性
+            # 使用一个额外的约束，确保教师网络输出有较高的置信度
+            teacher_probs = F.softmax(teacher_out_resized, dim=1)
+            teacher_confidence = torch.max(teacher_probs, dim=1)[0].mean()
+            teacher_entropy = -torch.sum(teacher_probs * torch.log(teacher_probs + 1e-6), dim=1).mean()
+            
+            # 鼓励教师网络更加自信的预测（低熵），适当惩罚高熵
+            confidence_weight = 0.1
+            self.teacher_confidence_loss = confidence_weight * teacher_entropy
+            
+            # 将教师的监督损失添加到总损失中，确保教师网络训练有效
+            self.loss_Teacher = self.teacher_loss + self.teacher_confidence_loss
 
             # 创建特征掩码 - 重点关注类别1的区域
             # 确保维度匹配：self.label形状为[B, 1, H, W]或[B, H, W]
@@ -301,12 +327,16 @@ class TripleHeteCD(BaseModel):
             else:
                 label_mask = self.label  # 已经是[B, 1, H, W]
 
+            # 创建变化区域的特征掩码，增强变化区域的权重
             feature_mask = torch.zeros_like(label_mask, dtype=torch.float)
+            
+            # 针对变化区域和非变化区域使用不同的权重
             # 将类别1区域的权重设置得更高，以增强对变化区域的学习
-            feature_mask[label_mask == 1] = 5.0  # 增加变化区域权重
+            feature_mask[label_mask == 1] = 8.0  # 大幅增加变化区域权重 (原为5.0)
             # 将类别0区域设置较低权重但不为0
-            feature_mask[label_mask == 0] = 0.3  # 降低非变化区域权重
+            feature_mask[label_mask == 0] = 0.2  # 进一步降低非变化区域权重 (原为0.3)
 
+            # 确保feature_mask的空间尺寸与特征尺寸匹配
             feature_mask = F.interpolate(
                 feature_mask,
                 size=self.student_feat.size()[2:],
@@ -327,7 +357,7 @@ class TripleHeteCD(BaseModel):
                 )
                 self.loss_Dynamic_Weight = dynamic_weight_total
 
-            # 计算异源注意力蒸馏损失
+            # 计算异源注意力蒸馏损失 - 使用增强的特征
             distill_total, feat_loss, out_loss, _ = self.distill_loss(
                 self.student_feat,
                 self.teacher_feat,
@@ -348,22 +378,26 @@ class TripleHeteCD(BaseModel):
             if self.use_dynamic_weights and self.log_vars is not None:
                 # 获取动态权重
                 cd_weight, distill_weight, diff_att_weight = self.get_dynamic_weights()
+                # 动态调整权重 - 如果变化区域比例低，增加CD损失权重
+                if change_ratio < 0.1:  # 变化区域比例小于10%
+                    cd_weight = cd_weight * (1.0 + (0.1 - change_ratio) * 5.0)  # 最多增加50%权重
+                
                 dynamic_weight = diff_att_weight * 0.5  # 设置动态异源权重迁移损失权重为差异图注意力损失权重的一半
 
                 self.loss_CD = self.loss_CD * cd_weight
                 self.loss_Distill = self.loss_Distill * distill_weight
                 self.loss_Diff_Att = self.loss_Diff_Att * diff_att_weight
+                # 为教师损失添加权重
+                self.loss_Teacher = self.loss_Teacher * (cd_weight * 0.3)  # 较小的权重以避免过度影响总损失
                 if hasattr(self, 'loss_Dynamic_Weight'):
                     self.loss_Dynamic_Weight = self.loss_Dynamic_Weight * dynamic_weight
-
-                # # 打印当前权重（仅用于调试）
-                # if self.current_epoch % 10 == 0 and torch.cuda.current_device() == 0:
-                #     print(f"当前动态权重: CD={cd_weight:.2f}, Distill={distill_weight:.2f}, Diff_Att={diff_att_weight:.2f}, Dynamic={dynamic_weight:.2f}")
             else:
                 # 使用固定权重
                 self.loss_CD = self.loss_CD * self.init_cd_weight
                 self.loss_Distill = self.loss_Distill * self.init_distill_weight
                 self.loss_Diff_Att = self.loss_Diff_Att * self.init_diff_att_weight
+                # 为教师损失添加权重
+                self.loss_Teacher = self.loss_Teacher * (self.init_cd_weight * 0.3)
         else:
             # 如果不使用蒸馏学习，则只使用CD损失
             if self.use_dynamic_weights and self.log_vars is not None:
@@ -374,6 +408,9 @@ class TripleHeteCD(BaseModel):
 
         # 组合损失
         self.loss_G = self.loss_CD + self.loss_Distill + self.loss_Diff_Att
+        # 如果有教师损失，添加到总损失中
+        if self.use_distill and hasattr(self, 'loss_Teacher'):
+            self.loss_G += self.loss_Teacher
         if self.use_dynamic_weights and hasattr(self, 'loss_Dynamic_Weight'):
             self.loss_G += self.loss_Dynamic_Weight
             
@@ -568,4 +605,9 @@ class TripleHeteCD(BaseModel):
                 # 确保损失值不是None且不是0张量
                 if loss_value is not None and not (isinstance(loss_value, torch.Tensor) and loss_value.item() == 0):
                     losses[name] = loss_value.item()
+        
+        # 添加教师网络损失以便监控
+        if hasattr(self, 'teacher_loss'):
+            losses['Teacher'] = self.teacher_loss.item()
+            
         return losses

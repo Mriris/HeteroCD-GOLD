@@ -10,11 +10,11 @@ class TrainOptions:
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Test',
+        parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='muagan_test',
+        parser.add_argument('--name', type=str, default='muagan_dynamic8',
                             help='实验名称。决定了在哪里存储样本和模型')
-        parser.add_argument('--gpu_ids', type=str, default='1,2',
+        parser.add_argument('--gpu_ids', type=str, default='0,2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints8', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
@@ -72,6 +72,16 @@ class TrainOptions:
         parser.add_argument('--init_cd_weight', type=float, default=120.0, help='变化检测损失的初始权重')
         parser.add_argument('--init_distill_weight', type=float, default=5.0, help='蒸馏损失的初始权重')
         parser.add_argument('--init_diff_att_weight', type=float, default=15.0, help='差异图注意力损失的初始权重')
+        
+        # 优化参数
+        parser.add_argument('--use_bidirectional_attention', action='store_true', default=True, help='是否使用双向通道注意力机制')
+        parser.add_argument('--use_nonlocal_similarity', action='store_true', default=True, help='是否使用非局部相似性匹配模块')
+        parser.add_argument('--enhanced_diff_attention', action='store_true', default=True, help='是否使用增强的差异图注意力迁移')
+        parser.add_argument('--use_contrastive_loss', action='store_true', default=True, help='是否使用对比学习损失')
+        parser.add_argument('--contrastive_temp', type=float, default=0.5, help='对比学习损失的温度参数')
+        parser.add_argument('--contrastive_weight', type=float, default=10.0, help='对比学习损失的权重')
+        parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='梯度累积步数，可以用于增大有效批次大小')
+        parser.add_argument('--feature_fusion_type', type=str, default='concat', choices=['concat', 'add', 'attention'], help='特征融合类型')
         
         self.isTrain = True
         return parser

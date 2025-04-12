@@ -1011,6 +1011,9 @@ class HeterogeneousAttentionDistillationLoss(nn.Module):
         
         # 梯度计算更稳定的MSE损失
         self.mse_loss = nn.MSELoss(reduction='mean')
+        
+        # 添加Cosine相似度损失，更好地保持特征语义
+        self.cos_loss = nn.CosineEmbeddingLoss(reduction='mean')
 
     def forward(self, student_features, teacher_features, student_outputs, teacher_outputs,
                 opt_t1, opt_t2, sar_t2, feature_mask=None):
@@ -1054,13 +1057,35 @@ class HeterogeneousAttentionDistillationLoss(nn.Module):
                 )
                 
             # 应用掩码加权的特征蒸馏
-            feature_loss = self.mse_loss(
+            feature_loss_mse = self.mse_loss(
                 student_features * feature_mask,
                 teacher_features * feature_mask
             )
         else:
             # 如果没有掩码，则计算普通的MSE损失
-            feature_loss = self.mse_loss(student_features, teacher_features)
+            feature_loss_mse = self.mse_loss(student_features, teacher_features)
+            
+        # 添加余弦相似度损失，更好地对齐特征语义
+        B, C, H, W = student_features.shape
+        student_features_flat = student_features.view(B, C, -1)
+        teacher_features_flat = teacher_features.view(B, C, -1)
+        
+        # 为每个空间位置计算余弦相似度
+        cosine_target = torch.ones(B, H*W).to(student_features.device)
+        
+        # 转置特征用于余弦相似度计算 [B, C, HW] -> [B, HW, C]
+        student_features_t = student_features_flat.transpose(1, 2)
+        teacher_features_t = teacher_features_flat.transpose(1, 2)
+        
+        # 计算余弦相似度损失
+        feature_loss_cos = self.cos_loss(
+            student_features_t.reshape(-1, C),
+            teacher_features_t.reshape(-1, C),
+            cosine_target.reshape(-1)
+        )
+        
+        # 组合MSE和余弦相似度损失
+        feature_loss = feature_loss_mse * 0.7 + feature_loss_cos * 0.3
             
         # 2. 输出蒸馏损失（KL散度）
         # 确保输出尺寸一致
