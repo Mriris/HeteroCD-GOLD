@@ -38,7 +38,7 @@ class TripleHeteCD(BaseModel):
         # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
         self.loss_names = ['CD']  # 基础损失名称
         if self.use_distill:
-            self.loss_names.extend(['Distill', 'Diff_Att', 'Teacher'])  # 添加Teacher损失到损失名称列表
+            self.loss_names.extend(['Distill', 'Diff_Att', 'Teacher'])
             if self.use_dynamic_weights:
                 self.loss_names.append('Dynamic_Weight')
                 # 初始化权重不确定性参数 (可学习参数)
@@ -64,7 +64,7 @@ class TripleHeteCD(BaseModel):
         # 定义网络
         if self.use_distill:
             self.netCD = TripleEUNet(3, 2)
-            # 使用新的异源注意力蒸馏损失
+            # 使用异源注意力蒸馏损失
             self.distill_loss = HeterogeneousAttentionDistillationLoss(
                 feature_weight=getattr(opt, 'distill_alpha', 0.3),
                 output_weight=getattr(opt, 'distill_beta', 0.5),
@@ -72,7 +72,7 @@ class TripleHeteCD(BaseModel):
                 temperature=getattr(opt, 'distill_temp', 2.5),
                 reduction=getattr(opt, 'kl_div_reduction', 'batchmean')
             )
-            # 额外添加差异图注意力迁移损失
+            # 添加差异图注意力迁移损失
             self.diff_att_loss = DifferenceAttentionLoss(
                 reduction='mean',
                 alpha=1.0,

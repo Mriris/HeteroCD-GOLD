@@ -187,12 +187,11 @@ if __name__ == '__main__':
     gradient_clip_norm = opt.gradient_clip_norm if hasattr(opt, 'gradient_clip_norm') else 1.0
     
     for epoch in range(resume_epoch,
-                       opt.n_epochs):  # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
-        epoch_start_time = time.time()  # timer for entire epoch
-        iter_data_time = time.time()  # timer for data loading per iteration
-        epoch_iter = 0  # the number of training iterations in current epoch, reset to 0 every epoch
-        visualizer.reset()  # reset the visualizer: make sure it saves the results to HTML at least once every epoch
-        
+                       opt.n_epochs):  # 外层循环用于不同的训练轮次；通过<epoch_count>和<epoch_count>+<save_latest_freq>来保存模型
+        epoch_start_time = time.time()  # 整个训练轮次的计时器
+        iter_data_time = time.time()  # 每次迭代数据加载的计时器
+        epoch_iter = 0  # 当前轮次中的训练迭代次数，每个轮次重置为0
+        visualizer.reset()  # 重置可视化器：确保每个轮次至少将结果保存到HTML一次
         # 设置当前轮次到模型中，用于动态权重计算
         if hasattr(model, 'set_epoch'):
             model.set_epoch(epoch)
