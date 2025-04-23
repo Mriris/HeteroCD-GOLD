@@ -91,5 +91,5 @@ def create_model(opt):
     
     
 # 导入供其他模块使用的类和函数
-from .DualEUNet import DualEUNet, TripleEUNet
+from .DualEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
 from .HeteCD import TripleHeteCD

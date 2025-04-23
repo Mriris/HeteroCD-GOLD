@@ -6,7 +6,7 @@ from collections import OrderedDict
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .DualEUNet import DualEUNet, TripleEUNet
+from .DualEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
 from .base_model import BaseModel
 from .loss import *
 from .loss import HeterogeneousAttentionDistillationLoss, DifferenceAttentionLoss, \
@@ -24,6 +24,8 @@ class TripleHeteCD(BaseModel):
 
         # 是否使用三分支网络和蒸馏学习
         self.use_distill = opt.use_distill
+        # 是否使用轻量化模型
+        self.use_lightweight = getattr(opt, 'use_lightweight', False)
 
         # 添加动态权重分配相关参数
         self.use_dynamic_weights = opt.use_dynamic_weights  # 直接从opt中获取参数值
@@ -63,7 +65,19 @@ class TripleHeteCD(BaseModel):
 
         # 定义网络
         if self.use_distill:
-            self.netCD = TripleEUNet(3, 2)
+            if self.use_lightweight:
+                # 使用轻量化三分支网络
+                print("使用轻量化模型")
+                self.netCD = LightweightTripleEUNet(
+                    3, 2, 
+                    channel_reduction=getattr(opt, 'channel_reduction', 0.5),
+                    attention_reduction_ratio=getattr(opt, 'attention_reduction_ratio', 32)
+                )
+            else:
+                # 使用标准三分支网络
+                print("使用标准模型")
+                self.netCD = TripleEUNet(3, 2)
+                
             # 使用异源注意力蒸馏损失
             self.distill_loss = HeterogeneousAttentionDistillationLoss(
                 feature_weight=getattr(opt, 'distill_alpha', 0.3),

@@ -48,6 +48,7 @@ if __name__ == '__main__':
     
     # 创建模型，设置use_distill=True启用蒸馏学习
     opt.use_distill = True  # 启用蒸馏学习
+    print(f"使用{'轻量化' if opt.use_lightweight else '标准'}模型")
     model = TripleHeteCD(opt, is_train=True)
     
     # 添加断点续训功能：恢复之前的训练状态

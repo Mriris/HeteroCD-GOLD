@@ -12,16 +12,16 @@ class TrainOptions:
         # 基本参数
         parser.add_argument('--dataroot', default='/data/jingwei/yantingxuan/Datasets/CityCN/Split8',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='muagan_dynamic8',
+        parser.add_argument('--name', type=str, default='muagan_Test',
                             help='实验名称。决定了在哪里存储样本和模型')
-        parser.add_argument('--gpu_ids', type=str, default='0,2',
+        parser.add_argument('--gpu_ids', type=str, default='3',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints8', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
                             help='网络初始化方式 [normal | xavier | kaiming | orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02,
                             help='normal、xavier和orthogonal的缩放因子。')
-        parser.add_argument('--use_amp', action='store_true', default=True, 
+        parser.add_argument('--use_amp', action='store_true', default=False, 
                             help='是否使用混合精度训练（需要PyTorch>=1.6），可以加速训练，但可能会降低稳定性')
         parser.add_argument('--gradient_clip_norm', type=float, default=1.0,
                             help='梯度裁剪的最大范数值，用于避免梯度爆炸')
@@ -82,6 +82,11 @@ class TrainOptions:
         parser.add_argument('--contrastive_weight', type=float, default=10.0, help='对比学习损失的权重')
         parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='梯度累积步数，可以用于增大有效批次大小')
         parser.add_argument('--feature_fusion_type', type=str, default='concat', choices=['concat', 'add', 'attention'], help='特征融合类型')
+        
+        # 轻量化模型参数
+        parser.add_argument('--use_lightweight', action='store_true', default=False, help='是否使用轻量化模型')
+        parser.add_argument('--channel_reduction', type=float, default=0.5, help='通道数减少比例，默认减少50%')
+        parser.add_argument('--attention_reduction_ratio', type=int, default=32, help='注意力模块的reduction ratio，默认为32（原始为16）')
         
         self.isTrain = True
         return parser
