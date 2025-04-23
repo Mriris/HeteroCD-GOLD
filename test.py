@@ -2,7 +2,7 @@ import os
 
 from torch.utils.data import DataLoader
 
-from models.HeteCD import TripleHeteCD
+from models.GOLD import TripleHeteCD
 from options.train_options import TrainOptions
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,3'

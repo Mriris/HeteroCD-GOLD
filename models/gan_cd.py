@@ -1,4 +1,4 @@
-from .DualEUNet import DualEUNet
+from .TripleEUNet import DualEUNet
 from .base_model import BaseModel
 from .loss import *
 

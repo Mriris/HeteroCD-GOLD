@@ -11,7 +11,7 @@ from scipy.stats import entropy, wasserstein_distance
 from skimage import io
 from torchvision import transforms
 
-from models.DualEUNet import DualEUNet
+from models.TripleEUNet import DualEUNet
 from utils.util import get_confuse_matrix, cm2score
 
 DATA_NAME = 'ST'

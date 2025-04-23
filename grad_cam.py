@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
 
-from models.DualEUNet import DualEUNet
+from models.TripleEUNet import DualEUNet
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 

@@ -6,7 +6,7 @@ import torch.multiprocessing
 from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 
-from models.HeteCD import TripleHeteCD
+from models.GOLD import TripleHeteCD
 from options.train_options import TrainOptions
 from utils.util import AverageMeter, get_confuse_matrix, cm2score
 from utils.visualizer import Visualizer

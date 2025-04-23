@@ -77,7 +77,7 @@ def create_model(opt):
         from .gan_cd import Pix2PixModel
         model = Pix2PixModel(opt)
     elif opt.model == 'HeteGAN':
-        from .HeteCD import TripleHeteCD
+        from .GOLD import TripleHeteCD
         model = TripleHeteCD(opt)
     else:
         raise NotImplementedError('模型[%s]未实现' % opt.model)
@@ -90,5 +90,5 @@ def create_model(opt):
     
     
 # 导入供其他模块使用的类和函数
-from .DualEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
-from .HeteCD import TripleHeteCD
+from .TripleEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
+from .GOLD import TripleHeteCD

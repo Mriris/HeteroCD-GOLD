@@ -6,7 +6,7 @@ from collections import OrderedDict
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .DualEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
+from .TripleEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
 from .base_model import BaseModel
 from .loss import *
 from .loss import HeterogeneousAttentionDistillationLoss, DifferenceAttentionLoss, \
