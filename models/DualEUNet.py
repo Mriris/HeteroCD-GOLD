@@ -943,7 +943,7 @@ class TripleEUNet(nn.Module):
             nn.BatchNorm2d(self.channels),
         )
         
-        # 新增：双向通道注意力融合模块
+        # 双向通道注意力融合模块
         self.bidirectional_attention = BidirectionalChannelAttention(self.channels, reduction_ratio=16)
         
         # 特征融合卷积层

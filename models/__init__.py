@@ -1,21 +1,20 @@
 """此包包含与目标函数、优化和网络架构相关的模块。
 
-要添加名为'dummy'的自定义模型类，您需要添加一个名为'dummy_model.py'的文件，并定义一个继承自BaseModel的子类DummyModel。
-您需要实现以下五个函数：
+要添加名为'dummy'的自定义模型类，需要添加一个名为'dummy_model.py'的文件，并定义一个继承自BaseModel的子类DummyModel。
+需要实现以下五个函数：
     -- <__init__>:                      初始化类；首先调用BaseModel.__init__(self, opt)。
     -- <set_input>:                     从数据集中解包数据并应用预处理。
     -- <forward>:                       产生中间结果。
     -- <optimize_parameters>:           计算损失，梯度，并更新网络权重。
     -- <modify_commandline_options>:    （可选）添加模型特定选项并设置默认选项。
 
-在<__init__>函数中，您需要定义四个列表：
+在<__init__>函数中，需要定义四个列表：
     -- self.loss_names (str 列表):          指定要绘制和保存的训练损失。
     -- self.model_names (str 列表):         定义训练中使用的网络。
     -- self.visual_names (str 列表):        指定要显示和保存的图像。
-    -- self.optimizers (优化器列表):    定义并初始化优化器。您可以为每个网络定义一个优化器。如果两个网络同时更新，可以使用itertools.chain将它们分组。请参考cycle_gan_model.py了解示例。
+    -- self.optimizers (优化器列表):    定义并初始化优化器。可以为每个网络定义一个优化器。如果两个网络同时更新，可以使用itertools.chain将它们分组。请参考cycle_gan_model.py了解示例。
 
-现在您可以通过指定标志'--model dummy'来使用模型类。
-有关更多详细信息，请参阅我们的模板模型类'template_model.py'。
+现在可以通过指定标志'--model dummy'来使用模型类。
 """
 
 import importlib

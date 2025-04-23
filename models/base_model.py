@@ -7,7 +7,7 @@ from . import networks
 
 class BaseModel(ABC):
     """这个类是所有模型的抽象基类。
-    要创建一个子类，你需要实现以下五个函数:
+    要创建一个子类，需要实现以下五个函数:
         -- <__init__>:                      初始化网络，定义网络，初始化损失函数和优化器
         -- <set_input>:                     从数据集中解析数据并应用预处理
         -- <forward>:                       生成中间结果
@@ -35,10 +35,10 @@ class BaseModel(ABC):
         参数:
             opt (Option类)-- 存储所有实验标志；需要是BaseOptions的子类
 
-        当创建你的自定义类时，你需要实现你自己的初始化。
-        在这个函数中，你应该首先调用 <BaseModel.__init__(self, opt)>
+        当创建自定义类时，需要实现自己的初始化。
+        在这个函数中，应该首先调用 <BaseModel.__init__(self, opt)>
         然后定义在测试和训练模式下需要使用的网络，损失函数，优化器。
-        此外，你也可以使用<setup>函数初始化你的模型。
+        此外，也可以使用<setup>函数初始化模型。
         """
         self.opt = opt
         self.gpu_ids = opt.gpu_ids
@@ -65,7 +65,7 @@ class BaseModel(ABC):
 
         参数:
             parser          -- 原始选项解析器
-            is_train (bool) -- 是否训练阶段或测试阶段。您可以使用此标志添加特定于训练或测试的选项。
+            is_train (bool) -- 是否训练阶段或测试阶段。可以使用此标志添加特定于训练或测试的选项。
 
         返回:
             修改后的解析器。

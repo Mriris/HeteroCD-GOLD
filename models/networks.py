@@ -75,7 +75,7 @@ def init_weights(net, init_type='normal', init_gain=0.02):
         init_gain (float)    -- normal、xavier和orthogonal的缩放因子。
 
     我们在原始的pix2pix和CycleGAN论文中使用了'normal'。但xavier和kaiming可能对某些应用程序更有效。
-    您可以自行尝试。
+    可以自行尝试。
     """
 
     def init_func(m):  # 定义初始化函数
