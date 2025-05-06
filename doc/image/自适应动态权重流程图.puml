@@ -1,0 +1,83 @@
+@startuml
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+title 自适应动态权重机制流程
+
+start
+
+:接收多任务损失和训练统计信息;
+note right: 输入：多任务损失、训练统计信息
+
+partition "基于不确定性的权重学习" {
+  :学习每个任务的不确定性参数;
+  :基于不确定性计算初始权重;
+  note right: 不确定性越高，权重越低
+  
+  :热身阶段权重过渡;
+  :计算过渡系数;
+  :权重混合;
+  
+  :主任务权重增强;
+  :增强系数计算;
+  :更新主任务权重;
+}
+note right: 不确定性高的任务\n权重设置较低
+
+partition "类别不平衡自适应处理" {
+  :计算变化区域比例;
+  :基于变化比例调整损失权重;
+  note right: 变化区域越少，权重越高
+}
+
+partition "区域感知的动态权重迁移" {
+  :基于教师网络差异图构建动态调整因子;
+  :计算显著区域掩码;
+  :生成增强差异图;
+  
+  :差异图归一化;
+  :计算归一化差异图;
+  :自适应阈值设定;
+  
+  fork
+    :高于阈值区域处理;
+    :自适应增强;
+  fork again
+    :低于阈值区域处理;
+    :自适应抑制;
+  end fork
+  
+  :指数变换增强对比度;
+  :计算权重掩码;
+  
+  :变化与非变化区域划分;
+  :变化区域;
+  :非变化区域;
+  
+  :区域特定损失计算;
+  fork
+    :变化区域损失;
+  fork again
+    :非变化区域损失;
+  end fork
+  
+  :动态权重损失整合;
+  :特征级损失;
+  :注意力机制损失;
+  :差异图损失;
+  :综合动态权重损失;
+}
+note right: 变化区域给予更高权重\n以突出重要区域
+
+:输出最终权重和损失;
+
+stop
+
+note right: <b>输出</b>:\n- 带权重的总损失\n- 均衡的学习目标
+@enduml

@@ -1,0 +1,54 @@
+@startuml
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+
+start
+note right: 输入:模态A特征和模态B特征
+
+:接收输入特征;
+
+:计算通道注意力权重;
+
+partition "双模态特征处理" {
+  fork
+     :模态A特征通道注意力计算;
+     :通过平均池化和最大池化提取特征;
+     :使用MLP处理池化结果;
+     :得到模态A特征通道注意力;
+  fork again
+     :模态B特征通道注意力计算;
+     :通过平均池化和最大池化提取特征;
+     :使用MLP处理池化结果;
+     :得到模态B特征通道注意力;
+  end fork
+}
+note right: 同时计算两个模态的通道注意力权重
+
+:计算共享注意力;
+note right: 连接两模态的平均池化和最大池化特征，\n使用MLP处理后得到共享通道注意力
+
+:特征增强与融合;
+
+partition "交叉特征增强" {
+  fork
+     :增强模态A特征 = 
+      模态B注意力增强 + 
+      共享注意力增强 + 
+      原始特征;
+  fork again
+     :增强模态B特征 = 
+      模态A注意力增强 + 
+      共享注意力增强 + 
+      原始特征;
+  end fork
+}
+
+:连接增强后的模态A和B特征;
+:使用卷积层处理连接特征;
+:输出最终融合特征;
+
+
+stop
+note right: 输出：融合后的特征
+@enduml 

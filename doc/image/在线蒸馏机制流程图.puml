@@ -1,0 +1,80 @@
+@startuml
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+note right: 输入:时间点1光学图像、时间点2光学图像、时间点2 SAR图像
+
+:接收输入图像;
+
+partition "特征提取阶段" {
+  fork
+    :教师网络特征提取（同源光学-光学）;
+    :接收时间点1光学图像;
+    :接收时间点2光学图像;
+    :提取光学特征;
+    :计算同源特征差异;
+    :生成教师差异图;
+    :计算教师空间注意力和通道注意力;
+  fork again
+    :学生网络特征提取（异源光学-SAR）;
+    :接收时间点1光学图像;
+    :接收时间点2 SAR图像;
+    :提取异源特征;
+    :应用双向通道注意力增强特征;
+    :计算异源特征差异;
+    :生成学生差异图;
+    :计算学生空间注意力和通道注意力;
+  end fork
+}
+note right: 同时处理同源和异源数据
+
+partition "多层次知识蒸馏" {
+  fork
+    :特征级知识迁移;
+    :结合MSE和余弦相似度计算特征损失;
+  fork again
+    :输出级知识迁移;
+    :基于KL散度和温度参数计算输出损失;
+  fork again
+    :差异图注意力迁移;
+    :计算差异图损失;
+    :计算空间注意力损失;
+    :计算通道注意力损失;
+    :计算注意力损失;
+  end fork
+  
+  :总蒸馏损失计算;
+  :加权组合各损失项;
+}
+note right: 从多个层次引导学生\n向教师学习变化模式
+
+partition "总损失函数计算" {
+  fork
+    :变化检测损失计算;
+    :交叉熵与Dice损失组合;
+  fork again
+    :教师网络损失计算;
+    :确保教师网络的精确性;
+  fork again
+    :动态权重损失计算;
+    :自适应多任务权重平衡;
+  end fork
+  
+  :计算加权总损失;
+  :多任务损失加权组合;
+}
+note right: 多任务学习框架\n平衡不同学习目标
+
+:反向传播更新网络参数;
+
+stop
+
+note right: 输出:更好泛化能力的变化检测结果
+@enduml 

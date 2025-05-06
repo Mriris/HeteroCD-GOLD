@@ -1,0 +1,73 @@
+@startuml
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+note right: 输入:教师网络与学生网络的特征
+
+:接收输入特征;
+
+partition "多度量差异图生成" {
+  fork
+    :教师网络差异计算;
+    :计算L2距离差异图;
+    :计算余弦距离差异图;
+    :融合多种度量差异图;
+    :非线性变换得到最终差异图;
+  fork again
+    :学生网络差异计算;
+    :计算L2距离差异图;
+    :计算余弦距离差异图;
+    :融合多种度量差异图;
+    :非线性变换得到最终差异图;
+  end fork
+}
+note right: 多种度量方式\n捕捉复杂变化模式
+
+partition "双维度注意力计算" {
+  fork
+    :教师网络注意力计算;
+    fork
+      :计算空间注意力;
+      note right: 关注哪里变化
+    fork again
+      :计算通道注意力;
+      note right: 关注特征类型变化
+    end fork
+  fork again
+    :学生网络注意力计算;
+    fork
+      :计算空间注意力;
+    fork again
+      :计算通道注意力;
+    end fork
+  end fork
+}
+
+:注意力迁移损失计算;
+
+partition "教师指导的注意力迁移" {
+  fork
+    :计算差异图损失;
+  fork again
+    :计算空间注意力损失;
+  fork again
+    :计算通道注意力损失;
+  end fork
+  
+  :综合注意力迁移损失;
+}
+note right: 教师网络指导学生网络\n看到重要的变化区域
+
+:输出增强的变化感知特征;
+
+stop
+
+note right: 输出:增强的变化检测结果
+@enduml 
