@@ -1,0 +1,34 @@
+@startuml 在线蒸馏-多层次知识蒸馏
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+
+partition "多层次知识蒸馏" {
+  fork
+    :特征级知识迁移;
+    :结合MSE和余弦相似度计算特征损失;
+  fork again
+    :输出级知识迁移;
+    :基于KL散度和温度参数计算输出损失;
+  fork again
+    :差异图注意力迁移;
+    :计算差异图损失;
+    :计算空间注意力损失;
+    :计算通道注意力损失;
+    :计算注意力损失;
+  end fork
+  
+  :总蒸馏损失计算;
+  :加权组合各损失项;
+}
+note right: 从多个层次引导学生\n向教师学习变化模式
+
+stop
+@enduml 

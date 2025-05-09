@@ -1,0 +1,31 @@
+@startuml 在线蒸馏-总损失函数计算
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+
+partition "总损失函数计算" {
+  fork
+    :变化检测损失计算;
+    :交叉熵与Dice损失组合;
+  fork again
+    :教师网络损失计算;
+    :确保教师网络的精确性;
+  fork again
+    :动态权重损失计算;
+    :自适应多任务权重平衡;
+  end fork
+  
+  :计算加权总损失;
+  :多任务损失加权组合;
+}
+note right: 多任务学习框架\n平衡不同学习目标
+
+stop
+@enduml 

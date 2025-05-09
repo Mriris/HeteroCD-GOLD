@@ -1,0 +1,36 @@
+@startuml 在线蒸馏-特征提取阶段
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+
+partition "特征提取阶段" {
+  fork
+    :教师网络特征提取（同源光学-光学）;
+    :接收时间点1光学图像;
+    :接收时间点2光学图像;
+    :提取光学特征;
+    :计算同源特征差异;
+    :生成教师差异图;
+    :计算教师空间注意力和通道注意力;
+  fork again
+    :学生网络特征提取（异源光学-SAR）;
+    :接收时间点1光学图像;
+    :接收时间点2 SAR图像;
+    :提取异源特征;
+    :应用双向通道注意力增强特征;
+    :计算异源特征差异;
+    :生成学生差异图;
+    :计算学生空间注意力和通道注意力;
+  end fork
+}
+note right: 同时处理同源和异源数据
+
+stop
+@enduml 

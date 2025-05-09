@@ -1,0 +1,24 @@
+@startuml 双向通道注意力流程图-简化版
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+
+start
+note left: 输入:模态A特征和模态B特征
+
+:接收输入特征;
+
+:计算通道注意力权重;
+note left: 为不同模态提取通道维度的重要性
+
+:计算共享注意力;
+note left: 连接两模态的特征提取共同关注点
+
+:特征增强与融合;
+note left: 交叉增强各模态特征
+
+:输出最终融合特征;
+
+stop
+note left: 输出：融合后的特征
+@enduml 

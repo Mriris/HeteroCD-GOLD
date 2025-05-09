@@ -1,0 +1,29 @@
+@startuml 在线蒸馏流程图-简化版
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+note left: 输入:时间点1光学图像\n时间点2光学图像\n时间点2 SAR图像
+
+:输入数据准备;
+
+:特征提取阶段;
+note left: 教师网络(同源光学-光学)\n学生网络(异源光学-SAR)
+
+:多层次知识蒸馏;
+note left: 特征级、输出级、差异图注意力迁移
+
+:总损失函数计算;
+note left: 变化检测损失\n教师网络损失\n蒸馏损失
+
+:反向传播更新网络参数;
+
+stop
+note left: 输出:更好泛化能力的变化检测结果
+@enduml 

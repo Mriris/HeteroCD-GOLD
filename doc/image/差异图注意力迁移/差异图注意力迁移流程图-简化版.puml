@@ -1,0 +1,30 @@
+@startuml 差异图注意力迁移流程图-简化版
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+note left: 输入:教师网络与学生网络的特征
+
+:接收输入特征;
+
+:多度量差异图生成;
+note left: 通过多种距离度量\n捕捉复杂变化模式
+
+:双维度注意力计算;
+note left: 计算空间与通道\n两个维度的注意力
+
+:注意力迁移损失计算;
+
+:教师指导的注意力迁移;
+
+:输出增强的变化感知特征;
+
+stop
+note left: 输出:增强的变化检测结果
+@enduml 

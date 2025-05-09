@@ -1,0 +1,27 @@
+@startuml 差异图注意力迁移-注意力迁移损失计算
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+
+partition "教师指导的注意力迁移" {
+  fork
+    :计算差异图损失;
+  fork again
+    :计算空间注意力损失;
+  fork again
+    :计算通道注意力损失;
+  end fork
+  
+  :综合注意力迁移损失;
+}
+note right: 教师网络指导学生网络\n看到重要的变化区域
+
+stop
+@enduml 

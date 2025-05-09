@@ -1,0 +1,26 @@
+@startuml 双向通道注意力-特征增强与融合
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+
+start
+
+partition "特征增强与融合" {
+  fork
+     :增强模态A特征 = 
+      模态B注意力增强 + 
+      共享注意力增强 + 
+      原始特征;
+  fork again
+     :增强模态B特征 = 
+      模态A注意力增强 + 
+      共享注意力增强 + 
+      原始特征;
+  end fork
+}
+
+:连接增强后的模态A和B特征;
+:使用卷积层处理连接特征;
+
+stop
+@enduml 

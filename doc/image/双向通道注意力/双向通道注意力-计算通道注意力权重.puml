@@ -1,0 +1,24 @@
+@startuml 双向通道注意力-计算通道注意力权重
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+
+start
+
+partition "计算通道注意力权重" {
+  fork
+     :模态A特征通道注意力计算;
+     :通过平均池化和最大池化提取特征;
+     :使用MLP处理池化结果;
+     :得到模态A特征通道注意力;
+  fork again
+     :模态B特征通道注意力计算;
+     :通过平均池化和最大池化提取特征;
+     :使用MLP处理池化结果;
+     :得到模态B特征通道注意力;
+  end fork
+}
+note right: 同时计算两个模态的通道注意力权重
+
+stop
+@enduml 

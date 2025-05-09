@@ -1,0 +1,34 @@
+@startuml 差异图注意力迁移-双维度注意力计算
+skinparam backgroundColor white
+skinparam roundcorner 20
+skinparam ArrowColor #0066CC
+skinparam ActivityBorderColor #000099
+skinparam ActivityFontSize 14
+skinparam noteBorderColor #FF9900
+skinparam noteFontSize 14
+skinparam noteBackgroundColor #FFFFCC
+
+start
+
+partition "双维度注意力计算" {
+  fork
+    :教师网络注意力计算;
+    fork
+      :计算空间注意力;
+      note right: 关注哪里变化
+    fork again
+      :计算通道注意力;
+      note right: 关注特征类型变化
+    end fork
+  fork again
+    :学生网络注意力计算;
+    fork
+      :计算空间注意力;
+    fork again
+      :计算通道注意力;
+    end fork
+  end fork
+}
+
+stop
+@enduml 
