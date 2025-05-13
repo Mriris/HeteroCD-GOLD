@@ -18,7 +18,6 @@ partition "计算通道注意力权重" {
      :得到模态B特征通道注意力;
   end fork
 }
-note right: 同时计算两个模态的通道注意力权重
 
 stop
 @enduml 
