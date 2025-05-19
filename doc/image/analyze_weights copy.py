@@ -13,8 +13,8 @@ WARMUP_EPOCHS = 20
 # 图表平滑参数
 SMOOTHING_SIGMA = 1  # 高斯滤波sigma参数，值越大曲线越平滑，仅PPT美化
 # 图表大小和样式参数
-FIGURE_WIDTH = 18
-FIGURE_HEIGHT = 3
+FIGURE_WIDTH = 12
+FIGURE_HEIGHT = 6
 LEGEND_FONTSIZE = 19
 TITLE_FONTSIZE = 16
 LABEL_FONTSIZE = 16
@@ -112,6 +112,7 @@ for col in log_columns:
     # 平滑后对数据再次缩放，确保最大值仍为1
     if smoothed_df[col].max() > 0:  # 避免除以0
         smoothed_df[col] = smoothed_df[col] / smoothed_df[col].max()
+
 # 绘制每个权重相对于自身的变化趋势
 plt.figure(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
 
@@ -142,13 +143,13 @@ plt.text(WARMUP_EPOCHS+1, 0.95, f'热身', color='red', fontsize=12)
 # plt.title('各损失权重自身相对变化趋势 (0-1归一化)', fontsize=TITLE_FONTSIZE)
 plt.xlabel('训练轮次', fontsize=LABEL_FONTSIZE)
 plt.ylabel('权重自身相对值', fontsize=LABEL_FONTSIZE)
-plt.legend(fontsize=LEGEND_FONTSIZE, loc='center left', bbox_to_anchor=(1.05, 0.5))
+plt.legend(fontsize=LEGEND_FONTSIZE, bbox_to_anchor=(1.02, 0.4), loc='center right')
 plt.grid(True, alpha=0.3)
-# 调整布局，确保图例不被裁剪
-plt.tight_layout(rect=[0, 0, 0.85, 1])
+# 调整布局
+plt.tight_layout()
 
 # 保存图表
-plt.savefig('doc/image/动态权重分配/weight_self_normalized_trend.png', dpi=300, bbox_inches='tight')
+plt.savefig('doc/image/动态权重分配/weight_self_normalized.png', dpi=300, bbox_inches='tight')
 
 print("分析完成，权重变化图已保存至doc/image/动态权重分配/目录")
 
