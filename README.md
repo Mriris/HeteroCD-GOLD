@@ -17,6 +17,8 @@ This project implements GOLD, a three-branch fully-supervised online distillatio
 - **LabelmeCD-AI Annotation Tool**: Synchronized dual-image display with AI-driven pre-annotations
 
 ## Dataset
+[![HuggingFace](https://img.shields.io/badge/🤗%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Mercyiris/remote-sensing-change-detection)
+[![ModelScope](https://img.shields.io/badge/ModelScope-Dataset-blue)](https://modelscope.cn/datasets/Mriris/remote-sensing-change-detection)
 
 First benchmark dataset combining optical-optical and optical-SAR time-series pairs:
 - **Gaofen-2** high-resolution optical images

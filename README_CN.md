@@ -17,6 +17,8 @@
 - **LabelmeCD-AI标注工具**：双图同步显示与AI预标注功能
 
 ## 数据集
+[![HuggingFace](https://img.shields.io/badge/🤗%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/Mercyiris/remote-sensing-change-detection)
+[![ModelScope](https://img.shields.io/badge/魔搭社区-Dataset-blue)](https://modelscope.cn/datasets/Mriris/remote-sensing-change-detection)
 
 首个结合光学-光学和光学-SAR时序对的基准数据集：
 - **高分二号**高分辨率光学图像
