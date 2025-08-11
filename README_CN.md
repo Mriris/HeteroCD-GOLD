@@ -51,6 +51,22 @@ data/
     └── Label/
 ```
 
+## 数据预处理
+
+将原始遥感图像处理为训练就绪的图像块：
+
+```bash
+python datasets/process_and_split.py --input_dir /path/to/raw/data --output_dir /path/to/processed/data
+```
+
+**主要功能:**
+- 基于地理坐标的重叠检测（80%阈值）
+- 纯黑色图像块过滤（95%阈值）
+- 自动划分训练/验证/测试集（80%/20%/20%）
+- 生成512×512图像块，支持数据增强
+
+**输入格式:** `{basename}_{A|B|D|E}.{tif|png}` 其中A/B/D为多时相图像，E为变化标签。
+
 ## 快速开始
 
 ### 训练
@@ -80,6 +96,8 @@ HeteroCD-GOLD/
 │   ├── TripleEUNet.py     # 三分支网络
 │   └── loss.py            # 损失函数
 ├── datasets/              # 数据加载工具
+│   ├── process_and_split.py # 数据预处理脚本
+│   └── dataset.py         # 数据集加载器
 ├── options/               # 训练/测试配置
 ├── train.py               # 训练脚本
 ├── test.py                # 测试脚本

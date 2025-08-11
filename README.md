@@ -51,6 +51,22 @@ data/
     └── Label/
 ```
 
+## Data Preprocessing
+
+Process raw remote sensing images into training-ready patches:
+
+```bash
+python datasets/process_and_split.py --input_dir /path/to/raw/data --output_dir /path/to/processed/data
+```
+
+**Key Features:**
+- Geographic coordinate-based overlap detection (80% threshold)
+- Pure black tile filtering (95% threshold)
+- Automatic train/val/test split (80%/20%/20%)
+- 512×512 patch generation with optional data augmentation
+
+**Input Format:** `{basename}_{A|B|D|E}.{tif|png}` where A/B/D are multi-temporal images and E is the change label.
+
 ## Quick Start
 
 ### Training
@@ -80,6 +96,8 @@ HeteroCD-GOLD/
 │   ├── TripleEUNet.py     # Three-branch network
 │   └── loss.py            # Loss functions
 ├── datasets/              # Data loading utilities
+│   ├── process_and_split.py # Data preprocessing script
+│   └── dataset.py         # Dataset loader
 ├── options/               # Training/testing options
 ├── train.py               # Training script
 ├── test.py                # Testing script
