@@ -46,20 +46,42 @@ class CDDataAugmentation:
             with_random_crop=False,
             with_scale_random_crop=False,
             with_random_blur=False,
-            random_color_tf=False
+            random_color_tf=False,
+            rotate_prob=0.0,
+            rotate_degree=0,
+            hflip_prob=0.0,
+            vflip_prob=0.0,
+            exchange_time_prob=0.0,
+            use_photometric=True,
+            brightness_delta=10,
+            contrast_range=(0.8, 1.2),
+            saturation_range=(0.8, 1.2),
+            hue_delta=10,
+            cat_max_ratio=0.75,
+            ignore_index=255
     ):
         self.img_size = img_size
         if self.img_size is None:
             self.img_size_dynamic = True
         else:
             self.img_size_dynamic = False
-        self.with_random_hflip = with_random_hflip
-        self.with_random_vflip = with_random_vflip
-        self.with_random_rot = with_random_rot
+        self.hflip_prob = hflip_prob if hflip_prob is not None else (0.5 if with_random_hflip else 0.0)
+        self.vflip_prob = vflip_prob if vflip_prob is not None else (0.5 if with_random_vflip else 0.0)
+        self.rotate_prob = rotate_prob if rotate_prob is not None else (0.5 if with_random_rot else 0.0)
+        self.rotate_degree = rotate_degree
         self.with_random_crop = with_random_crop
         self.with_scale_random_crop = with_scale_random_crop
         self.with_random_blur = with_random_blur
-        self.random_color_tf = random_color_tf
+        # photometric 设置
+        self.use_photometric = use_photometric or random_color_tf
+        self.brightness_delta = brightness_delta
+        self.contrast_range = contrast_range
+        self.saturation_range = saturation_range
+        self.hue_delta = hue_delta
+        # 其他
+        self.exchange_time_prob = exchange_time_prob
+        self.cat_max_ratio = cat_max_ratio
+        self.ignore_index = ignore_index
 
     def transform(self, imgs, labels, to_tensor=True):
         """
@@ -67,7 +89,7 @@ class CDDataAugmentation:
         :param labels: [ndarray,]
         :return: [ndarray,],[ndarray,]
         """
-        # 调整图像大小并转换为张量
+        # 调整图像大小并转换为PIL
         imgs = [F.to_pil_image(img) for img in imgs]
         if self.img_size is None:
             self.img_size = None
@@ -85,27 +107,57 @@ class CDDataAugmentation:
                 labels = [F.resize(img, [self.img_size, self.img_size], interpolation=0)
                           for img in labels]
 
-        random_base = 0.5
+        # 1) 时间交换（A/B交换）
+        if self.exchange_time_prob > 0 and len(imgs) >= 2:
+            if random.random() < self.exchange_time_prob:
+                imgs[0], imgs[1] = imgs[1], imgs[0]
 
-        if self.with_random_crop and random.random() > 0:
-            i, j, h, w = transforms.RandomResizedCrop(size=self.img_size). \
-                get_params(img=imgs[0], scale=(0.8, 1.2), ratio=(1, 1))
+        # 2) 随机旋转（对齐OpenCD: prob, ±degree）
+        if self.rotate_prob > 0 and self.rotate_degree > 0 and random.random() < self.rotate_prob:
+            angle = random.uniform(-float(self.rotate_degree), float(self.rotate_degree))
+            imgs = [img.rotate(angle, resample=Image.BILINEAR, expand=False) for img in imgs]
+            labels = [img.rotate(angle, resample=Image.NEAREST, expand=False) for img in labels]
 
-            imgs = [F.resized_crop(img, i, j, h, w,
-                                   size=(self.img_size, self.img_size),
-                                   interpolation=Image.CUBIC)
-                    for img in imgs]
+        # 3) 随机裁剪（带cat_max_ratio重试机制，最多10次），若无标签则跳过占比检查
+        if self.with_random_crop:
+            imgsize = imgs[0].size
+            selected_box = None
+            if len(labels) == 0 or self.cat_max_ratio >= 1.0:
+                selected_box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
+            else:
+                for _ in range(10):
+                    box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
+                    lbl_crop = pil_crop(labels[0], box, cropsize=self.img_size, default_value=self.ignore_index)
+                    lbl_np = np.array(lbl_crop)
+                    labels_unique, cnt = np.unique(lbl_np, return_counts=True)
+                    mask = labels_unique != self.ignore_index
+                    cnt = cnt[mask]
+                    if cnt.size == 0:
+                        selected_box = box
+                        break
+                    if (np.max(cnt) / np.sum(cnt)) < self.cat_max_ratio:
+                        selected_box = box
+                        break
+                # 若十次都未满足，占比条件，则使用最后一个box
+                if selected_box is None:
+                    selected_box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
 
-            labels = [F.resized_crop(img, i, j, h, w,
-                                     size=(self.img_size, self.img_size),
-                                     interpolation=Image.NEAREST)
-                      for img in labels]
+            imgs = [pil_crop(img, selected_box, cropsize=self.img_size, default_value=0) for img in imgs]
+            labels = [pil_crop(img, selected_box, cropsize=self.img_size, default_value=self.ignore_index) for img in labels]
 
+        # 4) 随机翻转（水平/垂直，按概率）
+        if self.hflip_prob > 0 and random.random() < self.hflip_prob:
+            imgs = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in imgs]
+            labels = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in labels]
+        if self.vflip_prob > 0 and random.random() < self.vflip_prob:
+            imgs = [img.transpose(Image.FLIP_TOP_BOTTOM) for img in imgs]
+            labels = [img.transpose(Image.FLIP_TOP_BOTTOM) for img in labels]
+
+        # 5) 可选：尺度随机裁剪（保持原有功能）
         if self.with_scale_random_crop:
             # 缩放
             scale_range = [1, 1.2]
             target_scale = scale_range[0] + random.random() * (scale_range[1] - scale_range[0])
-
             imgs = [pil_rescale(img, target_scale, order=3) for img in imgs]
             labels = [pil_rescale(img, target_scale, order=0) for img in labels]
             # 裁剪
@@ -113,25 +165,32 @@ class CDDataAugmentation:
             box = get_random_crop_box(imgsize=imgsize, cropsize=self.img_size)
             imgs = [pil_crop(img, box, cropsize=self.img_size, default_value=0)
                     for img in imgs]
-            labels = [pil_crop(img, box, cropsize=self.img_size, default_value=255)
+            labels = [pil_crop(img, box, cropsize=self.img_size, default_value=self.ignore_index)
                       for img in labels]
 
+        # 6) 可选：随机模糊（保持原有功能）
         if self.with_random_blur and random.random() > 0:
             radius = random.random()
             imgs = [img.filter(ImageFilter.GaussianBlur(radius=radius))
                     for img in imgs]
 
-        if self.random_color_tf:
-            color_jitter = transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.3)
-            imgs_tf = []
-            for img in imgs:
-                tf = transforms.ColorJitter(
-                    color_jitter.brightness,
-                    color_jitter.contrast,
-                    color_jitter.saturation,
-                    color_jitter.hue)
-                imgs_tf.append(tf(img))
-            imgs = imgs_tf
+        # 7) 光照与颜色扰动（对齐OpenCD PhotoMetricDistortion，使用ColorJitter近似）
+        if self.use_photometric:
+            # brightness_delta是加性扰动，这里用乘性近似到 [1-d/255, 1+d/255]
+            bd = max(float(self.brightness_delta), 0.0)
+            bmin = max(0.0, 1.0 - bd / 255.0)
+            bmax = 1.0 + bd / 255.0
+            cmin, cmax = float(self.contrast_range[0]), float(self.contrast_range[1])
+            smin, smax = float(self.saturation_range[0]), float(self.saturation_range[1])
+            # hue_delta按度近似到[0,0.5]范围
+            h = max(float(self.hue_delta), 0.0) / 180.0
+            jitter = transforms.ColorJitter(
+                brightness=(bmin, bmax),
+                contrast=(cmin, cmax),
+                saturation=(smin, smax),
+                hue=h
+            )
+            imgs = [jitter(img) for img in imgs]
 
         return imgs, labels
 
@@ -376,13 +435,24 @@ class Data(data.Dataset):
             )
             
         self.mode = mode
+        self.opt = opt
         self.augm = CDDataAugmentation(
-            img_size=512,
-            with_random_hflip=True,
-            with_random_vflip=True,
-            with_scale_random_crop=True,
-            with_random_blur=True,
-            random_color_tf=False
+            img_size=opt.crop_size if opt is not None else 512,
+            with_random_crop=True,
+            with_scale_random_crop=(opt.aug_use_scale_random_crop if (opt is not None and hasattr(opt, 'aug_use_scale_random_crop')) else True),
+            with_random_blur=(opt.aug_use_random_blur if (opt is not None and hasattr(opt, 'aug_use_random_blur')) else True),
+            # 开关来自TrainOptions（OpenCD风格）
+            rotate_prob=(opt.aug_rotate_prob if (opt is not None and hasattr(opt, 'aug_rotate_prob')) else 0.0),
+            rotate_degree=(opt.aug_rotate_degree if (opt is not None and hasattr(opt, 'aug_rotate_degree')) else 0),
+            hflip_prob=(opt.aug_hflip_prob if (opt is not None and hasattr(opt, 'aug_hflip_prob')) else 0.0),
+            vflip_prob=(opt.aug_vflip_prob if (opt is not None and hasattr(opt, 'aug_vflip_prob')) else 0.0),
+            exchange_time_prob=(opt.aug_exchange_time_prob if (opt is not None and hasattr(opt, 'aug_exchange_time_prob')) else 0.0),
+            use_photometric=(opt.aug_use_photometric if (opt is not None and hasattr(opt, 'aug_use_photometric')) else True),
+            brightness_delta=(opt.aug_brightness_delta if (opt is not None and hasattr(opt, 'aug_brightness_delta')) else 10),
+            contrast_range=(tuple(opt.aug_contrast_range) if (opt is not None and hasattr(opt, 'aug_contrast_range')) else (0.8, 1.2)),
+            saturation_range=(tuple(opt.aug_saturation_range) if (opt is not None and hasattr(opt, 'aug_saturation_range')) else (0.8, 1.2)),
+            hue_delta=(opt.aug_hue_delta if (opt is not None and hasattr(opt, 'aug_hue_delta')) else 10),
+            cat_max_ratio=(opt.aug_cat_max_ratio if (opt is not None and hasattr(opt, 'aug_cat_max_ratio')) else 0.75)
         )
 
     def get_mask_name(self, idx):
@@ -391,7 +461,8 @@ class Data(data.Dataset):
 
     def __getitem__(self, idx):
         img_A = io.imread(self.imgs_list_A[idx])
-        name = self.imgs_list_A[idx].split('/')[-1].replace('.tif', '.png')
+        base_name = os.path.basename(self.imgs_list_A[idx])
+        name = os.path.splitext(base_name)[0] + '.png'
         img_B = io.imread(self.imgs_list_B[idx])
         
         # 如果需要加载时间点2的光学图像
@@ -403,7 +474,7 @@ class Data(data.Dataset):
         label = self.labels[idx] // 255
         
         # 数据增强处理，确保所有图像采用相同的转换
-        if self.mode == "train":
+        if self.mode == "train" and (self.opt is None or getattr(self.opt, 'aug_in_train', True)):
             if self.load_t2_opt:
                 [img_A, img_B, img_C], [label] = self.augm.transform([img_A, img_B, img_C], [label])
             else:

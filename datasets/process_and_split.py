@@ -16,10 +16,10 @@ from rasterio.transform import from_bounds
 
 # 默认参数设置
 DEFAULT_INPUT_DIR = r"D:\0Program\Datasets\241120\Compare\Datas\Final"  # 输入目录
-DEFAULT_OUTPUT_DIR = r"D:\0Program\Datasets\241120\Compare\Datas\Split10"  # 输出目录
+DEFAULT_OUTPUT_DIR = r"D:\0Program\Datasets\241120\Compare\Datas\Split13"  # 输出目录
 DEFAULT_TILE_SIZE = 512  # 切片大小
 DEFAULT_SIZE_TOLERANCE = 2  # 大小容差
-DEFAULT_OVERLAP_RATIO = 0.0  # 裁剪重叠比例
+DEFAULT_OVERLAP_RATIO = 0.5  # 裁剪重叠比例
 DEFAULT_OVERLAP_THRESHOLD = 0.8  # 重叠度阈值，超过此值的小块将被丢弃
 DEFAULT_VAL_RATIO = 0.2  # 验证集占总数据的比例
 DEFAULT_CREATE_TEST_FOLDER = True  # 是否创建测试集文件夹
