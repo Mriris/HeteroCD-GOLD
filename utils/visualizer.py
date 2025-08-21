@@ -59,7 +59,7 @@ class Visualizer:
         步骤4：创建一个日志文件来存储训练损失
         """
         self.opt = opt  # 缓存选项
-        self.display_id = 1
+        self.display_id = getattr(opt, 'display_id', -1)  # 默认禁用visdom
         self.use_html = opt.isTrain
         self.win_size = 512
         self.name = opt.name

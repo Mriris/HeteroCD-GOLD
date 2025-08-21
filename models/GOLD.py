@@ -3,14 +3,14 @@ import math
 import os
 from collections import OrderedDict
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .TripleEUNet import DualEUNet, TripleEUNet, LightweightTripleEUNet
 from .base_model import BaseModel
 from .loss import *
-from .loss import HeterogeneousAttentionDistillationLoss, DifferenceAttentionLoss, \
-    DynamicHeterogeneousWeightTransferLoss
+from .loss import HeterogeneousAttentionDistillationLoss, DifferenceAttentionLoss
 
 
 class TripleHeteCD(BaseModel):
@@ -32,35 +32,60 @@ class TripleHeteCD(BaseModel):
         self.weight_warmup_epochs = opt.weight_warmup_epochs  # 权重热身阶段的轮次数
         self.current_epoch = 0  # 当前训练轮次
 
-        # 初始权重设置
+        # 初始权重设置（任务级）
         self.init_cd_weight = opt.init_cd_weight
         self.init_distill_weight = opt.init_distill_weight
         self.init_diff_att_weight = opt.init_diff_att_weight
 
-        # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
-        self.loss_names = ['CD']  # 基础损失名称
-        if self.use_distill:
-            self.loss_names.extend(['Distill', 'Diff_Att', 'Teacher'])
-            if self.use_dynamic_weights:
-                self.loss_names.append('Dynamic_Weight')
-                # 初始化权重不确定性参数 (可学习参数)
-                self.log_vars = nn.Parameter(torch.zeros(3))  # 为CD、Distill和Diff_Att损失创建可学习的权重参数
-                # 只在启用动态权重时添加动态异源权重迁移损失
-                self.dynamic_weight_loss = DynamicHeterogeneousWeightTransferLoss(
-                    reduction='mean'
-                )
-            else:
-                self.log_vars = None
-                self.dynamic_weight_loss = None
-        else:
-            self.log_vars = None
-            self.dynamic_weight_loss = None
+        # LCD 内部（学生/教师）初始权重
+        self.init_student_cd_weight = getattr(opt, 'init_student_cd_weight', 100.0)
+        self.init_teacher_cd_weight = getattr(opt, 'init_teacher_cd_weight', 20.0)
+        # LDISTILL 内部（特征/输出）初始权重
+        self.init_feat_distill_weight = getattr(opt, 'init_feat_distill_weight', 0.7)
+        self.init_out_distill_weight = getattr(opt, 'init_out_distill_weight', 0.3)
+        # LA 内部（差异图/通道/空间）初始权重
+        self.init_diff_map_weight = getattr(opt, 'init_diff_map_weight', 0.5)
+        self.init_channel_att_weight = getattr(opt, 'init_channel_att_weight', 0.3)
+        self.init_spatial_att_weight = getattr(opt, 'init_spatial_att_weight', 0.2)
 
-        # 指定要保存/显示的图像。训练/测试脚本将调用<BaseModel.get_current_visuals>
+        # CE 与 Dice 在 LCD 内部的固定比例（避免使用变化比例动态项）
+        self.ce_in_lcd_weight = getattr(opt, 'ce_in_lcd_weight', 100.0)
+        self.dice_in_lcd_weight = getattr(opt, 'dice_in_lcd_weight', 150.0)
+
+        # 交叉熵类别权重与蒸馏特征掩码权重
+        self.ce_weight_bg = getattr(opt, 'ce_weight_bg', 0.1)
+        self.ce_weight_fg = getattr(opt, 'ce_weight_fg', 0.9)
+        self.feature_mask_pos_weight = getattr(opt, 'feature_mask_pos_weight', 8.0)
+        self.feature_mask_neg_weight = getattr(opt, 'feature_mask_neg_weight', 0.2)
+
+        # 教师熵正则（可选，默认关闭）
+        self.teacher_entropy_weight = getattr(opt, 'teacher_entropy_weight', 0.0)
+
+        # 指定要打印的训练损失。训练/测试脚本将调用<BaseModel.get_current_losses>
+        self.loss_names = ['CD']
+        if self.use_distill:
+            self.loss_names.extend(['Distill', 'Diff_Att'])
+        # 分层不确定性权重参数
+        if self.use_dynamic_weights:
+            # 任务级：LCD / LDISTILL / LA
+            self.log_vars_task = nn.Parameter(torch.zeros(3))
+            # LCD 内部：学生CD / 教师CD
+            self.log_vars_cd = nn.Parameter(torch.zeros(2))
+            # LDISTILL 内部：特征蒸馏 / 输出蒸馏
+            self.log_vars_distill = nn.Parameter(torch.zeros(2))
+            # LA 内部：差异图 / 通道注意力 / 空间注意力
+            self.log_vars_att = nn.Parameter(torch.zeros(3))
+        else:
+            self.log_vars_task = None
+            self.log_vars_cd = None
+            self.log_vars_distill = None
+            self.log_vars_att = None
+
+        # 指定要保存/显示的图像。
         self.change_pred = None
         self.teacher_pred = None
         self.isTrain = is_train
-        # 指定要保存到磁盘的模型。训练/测试脚本将调用<BaseModel.save_networks>和<BaseModel.load_networks>
+        # 指定要保存到磁盘的模型。
         self.model_names = ['CD']
 
         # 定义网络
@@ -78,20 +103,17 @@ class TripleHeteCD(BaseModel):
                 print("使用标准模型")
                 self.netCD = TripleEUNet(3, 2)
                 
-            # 使用异源注意力蒸馏损失
+            # 使用蒸馏损失（仅返回特征/输出两部分）
             self.distill_loss = HeterogeneousAttentionDistillationLoss(
-                feature_weight=getattr(opt, 'distill_alpha', 0.3),
-                output_weight=getattr(opt, 'distill_beta', 0.5),
-                diff_att_weight=getattr(opt, 'distill_gamma', 0.2),
-                temperature=getattr(opt, 'distill_temp', 2.5),
+                temperature=getattr(opt, 'distill_temp', 2.0),
                 reduction=getattr(opt, 'kl_div_reduction', 'batchmean')
             )
-            # 添加差异图注意力迁移损失
+            # 差异图注意力迁移损失（仅用于计算三个原子项；总和在外部用不确定性权重融合）
             self.diff_att_loss = DifferenceAttentionLoss(
                 reduction='mean',
-                alpha=1.0,
-                beta=0.5,
-                gamma=0.5
+                alpha=getattr(opt, 'diff_att_alpha', 0.5),
+                beta=getattr(opt, 'diff_att_beta', 0.3),
+                gamma=getattr(opt, 'diff_att_gamma', 0.2)
             )
         else:
             self.netCD = DualEUNet(3, 2)
@@ -103,12 +125,15 @@ class TripleHeteCD(BaseModel):
             self.netCD = torch.nn.DataParallel(self.netCD, opt.gpu_ids)  # 多GPU支持
 
         if self.isTrain:
-            # 将log_vars添加到优化器中
+            # 将模型与log_vars添加到优化器中
             params = [
                 {'params': filter(lambda p: p.requires_grad, self.netCD.parameters())},
             ]
-            if self.use_dynamic_weights and self.log_vars is not None:
-                params.append({'params': self.log_vars, 'lr': opt.lr * 0.1})  # 使用较小的学习率优化权重参数
+            if self.use_dynamic_weights:
+                params.append({'params': self.log_vars_task, 'lr': opt.lr * 0.1})
+                params.append({'params': self.log_vars_cd, 'lr': opt.lr * 0.1})
+                params.append({'params': self.log_vars_distill, 'lr': opt.lr * 0.1})
+                params.append({'params': self.log_vars_att, 'lr': opt.lr * 0.1})
             self.optimizer_G = torch.optim.AdamW(params, lr=opt.lr,
                                                  betas=(0.9, 0.999), weight_decay=0.01)
             self.optimizers.append(self.optimizer_G)
@@ -121,55 +146,40 @@ class TripleHeteCD(BaseModel):
         """
         self.current_epoch = epoch
 
-    def get_dynamic_weights(self):
-        """计算基于不确定性的动态权重
-
-        返回:
-            tuple: (CD损失权重, 蒸馏损失权重, 差异图注意力损失权重)
-        """
-        # 基于不确定性的权重计算
-        # 参考: "Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics"
-        if self.use_dynamic_weights:
-            # 使用softplus确保数值稳定性，替代直接使用指数
-            precision = torch.nn.functional.softplus(-self.log_vars) + 1e-8
-
-            # 引入变化区域关注因子 - 提高对CD损失的注重度
-            # 变化区域通常是少数类，需要更高的权重来平衡
-            cd_focus_factor = 1.2
-            precision[0] = precision[0] * cd_focus_factor  # 增加CD损失的权重
-
-            # 应用热身和训练进度调整
-            if self.current_epoch < self.weight_warmup_epochs:
-                # 热身阶段: 从固定权重逐渐过渡到动态权重
-                progress = self.current_epoch / self.weight_warmup_epochs
-                # 固定的初始权重
-                fixed_weights = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight],
-                                             device=self.log_vars.device)
-
-                # 平滑过渡：使用更平滑的函数 - cos函数而不是线性
-                alpha = 0.5 * (1 - math.cos(progress * math.pi))
-
-                # 归一化固定权重
-                fixed_weights = fixed_weights / fixed_weights.sum()
-
-                # 混合固定权重和动态权重
-                weights = (1 - alpha) * fixed_weights + alpha * (precision / precision.sum())
-            else:
-                # 训练后期：添加自适应衰减机制，逐渐增加CD损失权重
-                late_stage_factor = min(1.0 + (self.current_epoch - self.weight_warmup_epochs) / 100.0, 1.5)
-                precision[0] = precision[0] * late_stage_factor
-                weights = precision / precision.sum()
-
-            # 重新缩放权重到原始量级
-            scale_factors = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight],
-                                         device=self.log_vars.device)
-            weights = weights * scale_factors.sum()
-            scaled_weights = weights * scale_factors
-
-            return scaled_weights[0].item(), scaled_weights[1].item(), scaled_weights[2].item()
+    def _compute_group_weights(self, log_vars, init_weights_tensor):
+        """基于不确定性的分组权重计算，支持warmup与按初始量级缩放"""
+        if not self.use_dynamic_weights or log_vars is None:
+            return init_weights_tensor
+        
+        # 确保log_vars与init_weights_tensor在同一设备上
+        log_vars = log_vars.to(init_weights_tensor.device)
+        precision = torch.nn.functional.softplus(-log_vars) + 1e-8
+        
+        if self.current_epoch < self.weight_warmup_epochs:
+            progress = self.current_epoch / max(1, self.weight_warmup_epochs)
+            alpha = 0.5 * (1 - math.cos(progress * math.pi))
+            fixed = init_weights_tensor / (init_weights_tensor.sum() + 1e-8)
+            dynamic = precision / (precision.sum() + 1e-8)
+            weights = (1 - alpha) * fixed + alpha * dynamic
         else:
-            # 使用固定权重
-            return self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight
+            weights = precision / (precision.sum() + 1e-8)
+        # 将权重缩放回初始量级
+        weights = weights * (init_weights_tensor.sum() + 1e-8)
+        scaled = weights * init_weights_tensor
+        return scaled
+
+    def get_group_weights(self):
+        """返回四组权重：任务级、LCD内部、LDISTILL内部、LA内部"""
+        device = self.netCD.module.parameters().__next__().device if isinstance(self.netCD, torch.nn.DataParallel) else next(self.netCD.parameters()).device
+        task_init = torch.tensor([self.init_cd_weight, self.init_distill_weight, self.init_diff_att_weight], device=device)
+        cd_init = torch.tensor([self.init_student_cd_weight, self.init_teacher_cd_weight], device=device)
+        distill_init = torch.tensor([self.init_feat_distill_weight, self.init_out_distill_weight], device=device)
+        att_init = torch.tensor([self.init_diff_map_weight, self.init_channel_att_weight, self.init_spatial_att_weight], device=device)
+        task_w = self._compute_group_weights(self.log_vars_task, task_init)
+        cd_w = self._compute_group_weights(self.log_vars_cd, cd_init)
+        distill_w = self._compute_group_weights(self.log_vars_distill, distill_init)
+        att_w = self._compute_group_weights(self.log_vars_att, att_init)
+        return task_w, cd_w, distill_w, att_w
 
     def set_input(self, A, B, label, name, device, C=None):
         """从数据加载器解包输入数据并执行必要的预处理步骤。
@@ -229,7 +239,7 @@ class TripleHeteCD(BaseModel):
                 self.forward_CD()
 
             # 使用与训练一致的类权重
-            cls_weights = torch.tensor([0.1, 0.9]).cuda()
+            cls_weights = torch.tensor([self.ce_weight_bg, self.ce_weight_fg]).cuda()
             loss_bn = CE_Loss(self.change_pred, self.label, cls_weights)
 
         self.is_train = True
@@ -253,7 +263,7 @@ class TripleHeteCD(BaseModel):
             self.teacher_pred = teacher_out
 
             # 使用与训练一致的类权重
-            cls_weights = torch.tensor([0.1, 0.9]).cuda()
+            cls_weights = torch.tensor([self.ce_weight_bg, self.ce_weight_fg]).cuda()
             loss_bn = CE_Loss(self.teacher_pred, self.label, cls_weights)
 
         return self.teacher_pred, loss_bn
@@ -279,100 +289,58 @@ class TripleHeteCD(BaseModel):
         """计算损失但不执行反向传播，用于与混合精度训练配合使用"""
         self.change_pred = F.interpolate(self.change_pred, size=(self.opt_img.size(2), self.opt_img.size(3)),
                                          mode='bilinear', align_corners=True)
-        # 调整类权重，进一步提高类别1(变化区域)的权重
-        cls_weights = torch.tensor([0.1, 0.9]).cuda()
+        # 类权重
+        cls_weights = torch.tensor([self.ce_weight_bg, self.ce_weight_fg]).cuda()
         self.label = self.label.long()
 
-        # 主要变化检测损失 - 增加类别平衡焦点损失成分，提高对变化区域的关注
+        # 主要变化检测损失（学生）
         ce_loss = CE_Loss(self.change_pred, self.label, cls_weights=cls_weights)
         dice_loss = Dice_loss(self.change_pred, self.label)
+        student_cd_loss = ce_loss * self.ce_in_lcd_weight + dice_loss * self.dice_in_lcd_weight
 
-        # 增强变化区域的权重
-        # 创建变化区域掩码
-        change_mask = (self.label == 1).float()
-        # 计算当前批次中变化区域的比例
-        change_ratio = change_mask.sum() / (change_mask.size(0) * change_mask.size(1) * change_mask.size(2))
-        # 根据变化区域比例动态调整Dice损失权重 - 变化区域越少，权重越高
-        dynamic_dice_weight = 150.0 + 50.0 * (1.0 - change_ratio)
-        
-        # 添加手动类别重要性调整，进一步关注变化区域
-        self.loss_CD = ce_loss * 100 + dice_loss * dynamic_dice_weight  # 使用动态Dice损失权重
-
-        # 初始化蒸馏损失和差异图注意力损失为0
+        # 初始化蒸馏与注意力损失
         self.loss_Distill = torch.tensor(0.0).cuda()
         self.loss_Diff_Att = torch.tensor(0.0).cuda()
 
-        # 只在启用动态权重时初始化Dynamic_Weight损失
-        if self.use_dynamic_weights and self.dynamic_weight_loss is not None:
-            self.loss_Dynamic_Weight = torch.tensor(0.0).cuda()
-
-        # 如果使用蒸馏学习且有教师网络输出
+        # 教师监督（合并入 LCD 内部）
+        teacher_cd_loss = torch.tensor(0.0).cuda()
         if self.use_distill and hasattr(self, 'teacher_out') and self.teacher_out is not None:
-            # 调整教师网络输出尺寸以匹配学生网络
             teacher_out_resized = F.interpolate(
                 self.teacher_out,
                 size=(self.change_pred.size(2), self.change_pred.size(3)),
                 mode='bilinear',
                 align_corners=True
             )
-            
-            # 为教师网络也计算CE和Dice损失，用于监控教师网络性能
             teacher_ce_loss = CE_Loss(teacher_out_resized, self.label, cls_weights=cls_weights)
             teacher_dice_loss = Dice_loss(teacher_out_resized, self.label)
-            self.teacher_loss = teacher_ce_loss * 100 + teacher_dice_loss * dynamic_dice_weight
-            
-            # 确保教师输出质量，适当降低不确定性
-            # 使用一个额外的约束，确保教师网络输出有较高的置信度
-            teacher_probs = F.softmax(teacher_out_resized, dim=1)
-            teacher_confidence = torch.max(teacher_probs, dim=1)[0].mean()
-            teacher_entropy = -torch.sum(teacher_probs * torch.log(teacher_probs + 1e-6), dim=1).mean()
-            
-            # 鼓励教师网络更加自信的预测（低熵），适当惩罚高熵
-            confidence_weight = 0.1
-            self.teacher_confidence_loss = confidence_weight * teacher_entropy
-            
-            # 将教师的监督损失添加到总损失中，确保教师网络训练有效
-            self.loss_Teacher = self.teacher_loss + self.teacher_confidence_loss
+            teacher_cd_loss = teacher_ce_loss * self.ce_in_lcd_weight + teacher_dice_loss * self.dice_in_lcd_weight
+            if self.teacher_entropy_weight > 0.0:
+                teacher_probs = F.softmax(teacher_out_resized, dim=1)
+                teacher_entropy = -torch.sum(teacher_probs * torch.log(teacher_probs + 1e-6), dim=1).mean()
+                teacher_cd_loss = teacher_cd_loss + self.teacher_entropy_weight * teacher_entropy
 
-            # 创建特征掩码 - 重点关注类别1的区域
-            # 确保维度匹配：self.label形状为[B, 1, H, W]或[B, H, W]
-            if len(self.label.shape) == 3:  # 形状为[B, H, W]
-                label_mask = self.label.unsqueeze(1)  # 变为[B, 1, H, W]
+            # 构造蒸馏用的特征掩码
+            if len(self.label.shape) == 3:
+                label_mask = self.label.unsqueeze(1)
             else:
-                label_mask = self.label  # 已经是[B, 1, H, W]
-
-            # 创建变化区域的特征掩码，增强变化区域的权重
+                label_mask = self.label
             feature_mask = torch.zeros_like(label_mask, dtype=torch.float)
-            
-            # 针对变化区域和非变化区域使用不同的权重
-            # 将类别1区域的权重设置得更高，以增强对变化区域的学习
-            feature_mask[label_mask == 1] = 8.0  # 大幅增加变化区域权重 (原为5.0)
-            # 将类别0区域设置较低权重但不为0
-            feature_mask[label_mask == 0] = 0.2  # 进一步降低非变化区域权重 (原为0.3)
-
-            # 确保feature_mask的空间尺寸与特征尺寸匹配
+            feature_mask[label_mask == 1] = self.feature_mask_pos_weight
+            feature_mask[label_mask == 0] = self.feature_mask_neg_weight
             feature_mask = F.interpolate(
                 feature_mask,
                 size=self.student_feat.size()[2:],
                 mode='nearest'
             )
 
-            # 计算差异图注意力损失 - 使用原始特征而不是增强后的特征
+            # 差异图注意力三个原子项
             diff_att_total, diff_att_loss, channel_att_loss, spatial_att_loss = self.diff_att_loss(
                 self.student_feat, self.teacher_feat,
                 self.opt_t1_feat, self.opt_t2_feat, self.sar_t2_feat
             )
 
-            # 只在启用动态权重时计算动态异源权重迁移损失
-            if self.use_dynamic_weights and self.dynamic_weight_loss is not None:
-                dynamic_weight_total, dynamic_feat_loss, dynamic_att_loss, dynamic_diff_loss = self.dynamic_weight_loss(
-                    self.student_feat, self.teacher_feat,
-                    self.opt_t1_feat, self.opt_t2_feat, self.sar_t2_feat
-                )
-                self.loss_Dynamic_Weight = dynamic_weight_total
-
-            # 计算异源注意力蒸馏损失 - 使用增强的特征
-            distill_total, feat_loss, out_loss, _ = self.distill_loss(
+            # 蒸馏两个子项（特征/输出）
+            feat_loss, out_loss = self.distill_loss(
                 self.student_feat,
                 self.teacher_feat,
                 self.change_pred,
@@ -383,50 +351,27 @@ class TripleHeteCD(BaseModel):
                 feature_mask
             )
 
-            # 记录原始损失值（用于显示）
-            self.loss_CD_orig = self.loss_CD.clone().detach()
-            self.loss_Distill = distill_total
-            self.loss_Diff_Att = diff_att_total
+            # 计算分层不确定性权重
+            task_w, cd_w, distill_w, att_w = self.get_group_weights()
 
-            # 应用权重
-            if self.use_dynamic_weights and self.log_vars is not None:
-                # 获取动态权重
-                cd_weight, distill_weight, diff_att_weight = self.get_dynamic_weights()
-                # 动态调整权重 - 如果变化区域比例低，增加CD损失权重
-                if change_ratio < 0.1:  # 变化区域比例小于10%
-                    cd_weight = cd_weight * (1.0 + (0.1 - change_ratio) * 5.0)  # 最多增加50%权重
-                
-                dynamic_weight = diff_att_weight * 0.5  # 设置动态异源权重迁移损失权重为差异图注意力损失权重的一半
+            # 组合 LCD（学生/教师）
+            self.loss_CD = student_cd_loss * cd_w[0] + teacher_cd_loss * cd_w[1]
+            # 组合 LDISTILL（特征/输出）
+            self.loss_Distill = feat_loss * distill_w[0] + out_loss * distill_w[1]
+            # 组合 LA（差异图/通道/空间）
+            self.loss_Diff_Att = (diff_att_loss * att_w[0] +
+                                   channel_att_loss * att_w[1] +
+                                   spatial_att_loss * att_w[2])
 
-                self.loss_CD = self.loss_CD * cd_weight
-                self.loss_Distill = self.loss_Distill * distill_weight
-                self.loss_Diff_Att = self.loss_Diff_Att * diff_att_weight
-                # 为教师损失添加权重
-                self.loss_Teacher = self.loss_Teacher * (cd_weight * 0.3)  # 较小的权重以避免过度影响总损失
-                if hasattr(self, 'loss_Dynamic_Weight'):
-                    self.loss_Dynamic_Weight = self.loss_Dynamic_Weight * dynamic_weight
-            else:
-                # 使用固定权重
-                self.loss_CD = self.loss_CD * self.init_cd_weight
-                self.loss_Distill = self.loss_Distill * self.init_distill_weight
-                self.loss_Diff_Att = self.loss_Diff_Att * self.init_diff_att_weight
-                # 为教师损失添加权重
-                self.loss_Teacher = self.loss_Teacher * (self.init_cd_weight * 0.3)
+            # 任务级融合
+            self.loss_G = (self.loss_CD * task_w[0] +
+                           self.loss_Distill * task_w[1] +
+                           self.loss_Diff_Att * task_w[2])
         else:
-            # 如果不使用蒸馏学习，则只使用CD损失
-            if self.use_dynamic_weights and self.log_vars is not None:
-                cd_weight, _, _ = self.get_dynamic_weights()
-                self.loss_CD = self.loss_CD * cd_weight
-            else:
-                self.loss_CD = self.loss_CD * self.init_cd_weight
-
-        # 组合损失
-        self.loss_G = self.loss_CD + self.loss_Distill + self.loss_Diff_Att
-        # 如果有教师损失，添加到总损失中
-        if self.use_distill and hasattr(self, 'loss_Teacher'):
-            self.loss_G += self.loss_Teacher
-        if self.use_dynamic_weights and hasattr(self, 'loss_Dynamic_Weight'):
-            self.loss_G += self.loss_Dynamic_Weight
+            # 不使用蒸馏时，仅有学生 LCD
+            task_w, cd_w, distill_w, att_w = self.get_group_weights()
+            self.loss_CD = student_cd_loss * cd_w[0]  # 仅学生项
+            self.loss_G = self.loss_CD * task_w[0]
             
         return self.loss_G
 
@@ -521,92 +466,17 @@ class TripleHeteCD(BaseModel):
                                 load_path = os.path.join(self.save_dir, load_filename)
                                 print(f"将加载最佳模型: {load_path}")
                             else:
-                                print(f"警告：未找到任何可用模型文件！将使用初始化的模型。")
-                                continue
-                    elif epoch == 'best':
-                        # 尝试加载best模型
-                        print(f"尝试查找最佳模型文件...")
-                        best_model = [f for f in os.listdir(self.save_dir)
-                                      if f.startswith('best_net_') and f.endswith('.pth')]
-                        if best_model:
-                            load_filename = best_model[0]
-                            load_path = os.path.join(self.save_dir, load_filename)
-                            print(f"将加载最佳模型: {load_path}")
-                        else:
-                            # 如果没有最佳模型，尝试加载最新模型
-                            print(f"未找到最佳模型，尝试查找最新模型...")
-                            model_files = [f for f in os.listdir(self.save_dir)
-                                           if f.endswith(f'_net_{name}.pth')]
-                            if model_files:
-                                model_files.sort(key=lambda x: int(x.split('_')[0])
-                                if x.split('_')[0].isdigit() else -1,
-                                                 reverse=True)
-                                load_filename = model_files[0]
-                                load_path = os.path.join(self.save_dir, load_filename)
-                                print(f"将加载最新模型: {load_path}")
-                            else:
-                                print(f"警告：未找到任何可用模型文件！将使用初始化的模型。")
-                                continue
+                                print(f"未找到任何可用的模型文件。")
+
+                # 最终加载模型
+                if os.path.exists(load_path):
+                    net = getattr(self, 'net' + name)
+                    state_dict = torch.load(load_path)
+                    if isinstance(net, torch.nn.DataParallel):
+                        net.module.load_state_dict(state_dict)
                     else:
-                        # 如果是特定epoch但找不到，尝试最佳模型或最新模型
-                        print(f"无法找到epoch {epoch}的模型文件，尝试查找其他可用模型...")
-
-                        # 先尝试加载最佳模型
-                        best_model = [f for f in os.listdir(self.save_dir)
-                                      if f.startswith('best_net_') and f.endswith('.pth')]
-                        if best_model:
-                            load_filename = best_model[0]
-                            load_path = os.path.join(self.save_dir, load_filename)
-                            print(f"将加载最佳模型: {load_path}")
-                        else:
-                            # 再尝试加载最新的普通模型
-                            model_files = [f for f in os.listdir(self.save_dir)
-                                           if f.endswith(f'_net_{name}.pth')]
-                            if model_files:
-                                model_files.sort(key=lambda x: int(x.split('_')[0])
-                                if x.split('_')[0].isdigit() else -1,
-                                                 reverse=True)
-                                load_filename = model_files[0]
-                                load_path = os.path.join(self.save_dir, load_filename)
-                                print(f"将加载最新模型: {load_path}")
-                            else:
-                                print(f"警告：未找到任何可用模型文件！将使用初始化的模型。")
-                                continue
-
-                net = getattr(self, 'net' + name)
-                if isinstance(net, torch.nn.DataParallel):
-                    net = net.module
-
-                print('从%s加载网络' % load_path)
-
-                try:
-                    state_dict = torch.load(load_path, map_location=str(self.device))
-
-                    # 处理metadata
-                    if hasattr(state_dict, '_metadata'):
-                        del state_dict._metadata
-
-                    # 尝试移除"module."前缀
-                    new_state_dict = OrderedDict()
-                    for k, v in state_dict.items():
-                        if k.startswith('module.'):
-                            name = k[7:]  # 移除 'module.' 前缀
-                        else:
-                            name = k
-                        new_state_dict[name] = v
-
-                    # 加载状态字典
-                    net.load_state_dict(new_state_dict)
-                    print(f"成功加载模型！")
-
-                    # 检查加载的参数是否有效
-                    param_sum = sum(p.sum().item() for p in net.parameters() if p.requires_grad)
-                    print(f"模型参数总和: {param_sum:.4f}")
-                    if abs(param_sum) <= 0.1:
-                        print("警告：模型参数总和接近零，可能未正确加载！")
-                except Exception as e:
-                    print(f"加载模型时出错: {e}")
-                    print(f"无法加载模型，将使用初始化的权重！")
+                        net.load_state_dict(state_dict)
+                    print(f"模型已加载: {load_path}")
 
     def get_current_losses(self):
         """返回当前损失的有序字典"""

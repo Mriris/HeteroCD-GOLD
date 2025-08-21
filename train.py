@@ -459,7 +459,8 @@ if __name__ == '__main__':
             # 保存最佳结果预测图
             for i in range(len(names_all_val)):
                 save_path = os.path.join(best_preds_dir, names_all_val[i])
-                cv2.imwrite(save_path, preds_all_val[i] * 255)
+                pred_img = (preds_all_val[i] * 255).astype(np.uint8)
+                cv2.imwrite(save_path, pred_img)
             
             print('🌟 更新最佳IoU模型 🌟')
         
