@@ -66,30 +66,30 @@ class TrainOptions:
         # 动态权重分配参数
         parser.add_argument('--use_dynamic_weights', action='store_true', default=True, help='是否使用动态权重分配机制')
         parser.add_argument('--weight_warmup_epochs', type=int, default=20, help='权重热身阶段的轮次数')
-        # 任务级初始权重
-        parser.add_argument('--init_cd_weight', type=float, default=120.0, help='变化检测损失的初始权重')
-        parser.add_argument('--init_distill_weight', type=float, default=5.0, help='蒸馏损失的初始权重')
-        parser.add_argument('--init_diff_att_weight', type=float, default=15.0, help='差异图注意力损失的初始权重')
-        # LCD 内部初始权重
-        parser.add_argument('--init_student_cd_weight', type=float, default=100.0, help='LCD内部学生监督初始权重')
-        parser.add_argument('--init_teacher_cd_weight', type=float, default=20.0, help='LCD内部教师监督初始权重')
-        # LDISTILL 内部初始权重
+        # 任务级初始权重（缩放到1量级，避免总损失量级过大）
+        parser.add_argument('--init_cd_weight', type=float, default=1.0, help='变化检测损失的初始权重')
+        parser.add_argument('--init_distill_weight', type=float, default=0.3, help='蒸馏损失的初始权重')
+        parser.add_argument('--init_diff_att_weight', type=float, default=0.2, help='差异图注意力损失的初始权重')
+        # LCD 内部初始权重（保持学生:教师=5:1，但缩小到1量级）
+        parser.add_argument('--init_student_cd_weight', type=float, default=1.0, help='LCD内部学生监督初始权重')
+        parser.add_argument('--init_teacher_cd_weight', type=float, default=0.2, help='LCD内部教师监督初始权重')
+        # LDISTILL 内部初始权重（维持0.7/0.3比例）
         parser.add_argument('--init_feat_distill_weight', type=float, default=0.7, help='LDISTILL内部特征蒸馏初始权重')
         parser.add_argument('--init_out_distill_weight', type=float, default=0.3, help='LDISTILL内部输出蒸馏初始权重')
-        # LA 内部初始权重
+        # LA 内部初始权重（维持0.5/0.3/0.2比例）
         parser.add_argument('--init_diff_map_weight', type=float, default=0.5, help='LA内部差异图初始权重')
         parser.add_argument('--init_channel_att_weight', type=float, default=0.3, help='LA内部通道注意力初始权重')
         parser.add_argument('--init_spatial_att_weight', type=float, default=0.2, help='LA内部空间注意力初始权重')
 
-        # LCD 内部CE/Dice组合系数
-        parser.add_argument('--ce_in_lcd_weight', type=float, default=100.0, help='LCD内部CE损失系数')
-        parser.add_argument('--dice_in_lcd_weight', type=float, default=150.0, help='LCD内部Dice损失系数')
+        # LCD 内部CE/Dice组合系数（缩放到1量级，保留约2:3的相对关系）
+        parser.add_argument('--ce_in_lcd_weight', type=float, default=1.0, help='LCD内部CE损失系数')
+        parser.add_argument('--dice_in_lcd_weight', type=float, default=1.5, help='LCD内部Dice损失系数')
 
-        # CE 类权重与蒸馏特征掩码权重
+        # CE 类权重与蒸馏特征掩码权重（适度收敛）
         parser.add_argument('--ce_weight_bg', type=float, default=0.1, help='CE背景类权重')
         parser.add_argument('--ce_weight_fg', type=float, default=0.9, help='CE前景类权重')
-        parser.add_argument('--feature_mask_pos_weight', type=float, default=8.0, help='蒸馏特征掩码正样本权重')
-        parser.add_argument('--feature_mask_neg_weight', type=float, default=0.2, help='蒸馏特征掩码负样本权重')
+        parser.add_argument('--feature_mask_pos_weight', type=float, default=4.0, help='蒸馏特征掩码正样本权重')
+        parser.add_argument('--feature_mask_neg_weight', type=float, default=0.5, help='蒸馏特征掩码负样本权重')
         parser.add_argument('--teacher_entropy_weight', type=float, default=0.0, help='教师熵正则权重(默认关闭)')
         
         # 轻量化模型参数
