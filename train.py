@@ -44,7 +44,7 @@ if __name__ == '__main__':
     
     # 加载验证集，同样加载时间点2的光学图像
     val_set = dataset.Data('val', root=opt.dataroot, load_t2_opt=True)
-    val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=False, drop_last=True)
+    val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=False, drop_last=False)
     
     # 创建模型，设置use_distill=True启用蒸馏学习
     opt.use_distill = True  # 启用蒸馏学习

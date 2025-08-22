@@ -497,7 +497,7 @@ class DistillationLoss(nn.Module):
         reduction (str): 损失的缩减方式，可以是'mean', 'sum', 'batchmean', 'none'
     """
 
-    def __init__(self, alpha=0.5, temperature=4.0, reduction='batchmean'):
+    def __init__(self, alpha=0.5, temperature=4.0, reduction='mean'):
         super(DistillationLoss, self).__init__()
         self.alpha = alpha
         self.temperature = temperature

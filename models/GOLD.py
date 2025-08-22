@@ -163,10 +163,9 @@ class TripleHeteCD(BaseModel):
             weights = (1 - alpha) * fixed + alpha * dynamic
         else:
             weights = precision / (precision.sum() + 1e-8)
-        # 将权重缩放回初始量级
+        # 将权重缩放回初始量级（去除二次逐元素缩放）
         weights = weights * (init_weights_tensor.sum() + 1e-8)
-        scaled = weights * init_weights_tensor
-        return scaled
+        return weights
 
     def get_group_weights(self):
         """返回四组权重：任务级、LCD内部、LDISTILL内部、LA内部"""
@@ -179,6 +178,18 @@ class TripleHeteCD(BaseModel):
         cd_w = self._compute_group_weights(self.log_vars_cd, cd_init)
         distill_w = self._compute_group_weights(self.log_vars_distill, distill_init)
         att_w = self._compute_group_weights(self.log_vars_att, att_init)
+        # 任务级权重 clip 与 LCD 保底
+        total = task_w.sum() + 1e-8
+        min_lcd = 0.6
+        max_distill = 0.3
+        max_att = 0.2
+        target = torch.tensor([min_lcd, max_distill, max_att], device=task_w.device) * total
+        task_w = torch.stack([
+            torch.max(task_w[0], target[0]),
+            torch.min(task_w[1], target[1]),
+            torch.min(task_w[2], target[2]),
+        ])
+        task_w = task_w / (task_w.sum() + 1e-8) * total
         return task_w, cd_w, distill_w, att_w
 
     def set_input(self, A, B, label, name, device, C=None):
@@ -354,10 +365,17 @@ class TripleHeteCD(BaseModel):
             # 计算分层不确定性权重
             task_w, cd_w, distill_w, att_w = self.get_group_weights()
 
+            # 蒸馏与教师监督热身/渐入
+            if self.weight_warmup_epochs and self.weight_warmup_epochs > 0:
+                progress = min(max(self.current_epoch / float(self.weight_warmup_epochs), 0.0), 1.0)
+                distill_alpha = 0.5 * (1 - math.cos(progress * math.pi))
+            else:
+                distill_alpha = 1.0
+
             # 组合 LCD（学生/教师）
-            self.loss_CD = student_cd_loss * cd_w[0] + teacher_cd_loss * cd_w[1]
+            self.loss_CD = student_cd_loss * cd_w[0] + (teacher_cd_loss * distill_alpha) * cd_w[1]
             # 组合 LDISTILL（特征/输出）
-            self.loss_Distill = feat_loss * distill_w[0] + out_loss * distill_w[1]
+            self.loss_Distill = distill_alpha * (feat_loss * distill_w[0] + out_loss * distill_w[1])
             # 组合 LA（差异图/通道/空间）
             self.loss_Diff_Att = (diff_att_loss * att_w[0] +
                                    channel_att_loss * att_w[1] +

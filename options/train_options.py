@@ -10,11 +10,11 @@ class TrainOptions:
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default=r'C:\1DataSets\241120\Compare\Datas\TestSplit4',
+        parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split13',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='gold_Test4',
+        parser.add_argument('--name', type=str, default='gold3',
                             help='实验名称。决定了在哪里存储样本和模型')
-        parser.add_argument('--gpu_ids', type=str, default='0',
+        parser.add_argument('--gpu_ids', type=str, default='2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints9', help='模型保存路径')
         parser.add_argument('--init_type', type=str, default='normal',
@@ -41,7 +41,7 @@ class TrainOptions:
         # 训练参数
         parser.add_argument('--load_size', type=int, default=512, help='将图像缩放到此大小')
         parser.add_argument('--crop_size', type=int, default=512, help='然后裁剪到此大小')
-        parser.add_argument('--n_epochs', type=int, default=1, help='使用初始学习率的epoch数量')
+        parser.add_argument('--n_epochs', type=int, default=400, help='使用初始学习率的epoch数量')
         parser.add_argument('--beta1', type=float, default=0.5, help='adam的动量项')
         parser.add_argument('--lr', type=float, default=0.0005, help='adam的初始学习率')
         parser.add_argument('--lr_policy', type=str, default='cosine',
@@ -55,8 +55,8 @@ class TrainOptions:
         # 蒸馏学习参数
         parser.add_argument('--use_distill', action='store_true', default=True, help='是否使用蒸馏学习')
         parser.add_argument('--distill_temp', type=float, default=2.0, help='蒸馏学习的温度参数（统一默认2.0）')
-        parser.add_argument('--kl_div_reduction', type=str, default='batchmean', 
-                            help='KL散度损失的缩减方式 [batchmean | mean | sum | none]；推荐batchmean')
+        parser.add_argument('--kl_div_reduction', type=str, default='mean', 
+                            help='KL散度损失的缩减方式 [batchmean | mean | sum | none]；推荐mean')
         
         # 差异图注意力迁移参数（仅用于原子项，外部不确定性权重融合）
         parser.add_argument('--diff_att_alpha', type=float, default=0.5, help='差异图注意力损失中差异图权重(初始)')
@@ -68,7 +68,7 @@ class TrainOptions:
         parser.add_argument('--weight_warmup_epochs', type=int, default=20, help='权重热身阶段的轮次数')
         # 任务级初始权重（缩放到1量级，避免总损失量级过大）
         parser.add_argument('--init_cd_weight', type=float, default=1.0, help='变化检测损失的初始权重')
-        parser.add_argument('--init_distill_weight', type=float, default=0.3, help='蒸馏损失的初始权重')
+        parser.add_argument('--init_distill_weight', type=float, default=0.03, help='蒸馏损失的初始权重（下调以防早期主导）')
         parser.add_argument('--init_diff_att_weight', type=float, default=0.2, help='差异图注意力损失的初始权重')
         # LCD 内部初始权重（保持学生:教师=5:1，但缩小到1量级）
         parser.add_argument('--init_student_cd_weight', type=float, default=1.0, help='LCD内部学生监督初始权重')
@@ -103,7 +103,7 @@ class TrainOptions:
         parser.add_argument('--aug_rotate_degree', type=float, default=180, help='随机旋转角度范围（±度）')
         parser.add_argument('--aug_hflip_prob', type=float, default=0.5, help='水平翻转概率')
         parser.add_argument('--aug_vflip_prob', type=float, default=0.5, help='垂直翻转概率')
-        parser.add_argument('--aug_exchange_time_prob', type=float, default=0.1, help='时间交换概率（A/B交换）')
+        parser.add_argument('--aug_exchange_time_prob', type=float, default=0.0, help='时间交换概率（A/B交换）')
         parser.add_argument('--aug_use_photometric', action='store_true', default=True, help='是否启用光照与颜色扰动')
         parser.add_argument('--aug_brightness_delta', type=float, default=10, help='亮度随机偏移范围（±）')
         parser.add_argument('--aug_contrast_range', type=float, nargs=2, default=(0.8, 1.2), help='对比度缩放范围')
