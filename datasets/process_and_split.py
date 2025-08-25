@@ -23,8 +23,8 @@ except ImportError:
     print("警告: sklearn未安装，地理感知功能将被禁用")
 
 # 默认参数设置
-DEFAULT_INPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Final"  # 输入目录
-DEFAULT_OUTPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Split17"  # 输出目录
+DEFAULT_INPUT_DIR = r"C:\1DataSets\241120\Compare\Datas\Final"  # 输入目录
+DEFAULT_OUTPUT_DIR = r"C:\1DataSets\241120\Compare\Datas\Split19"  # 输出目录
 DEFAULT_TILE_SIZE = 512  # 切片大小
 DEFAULT_SIZE_TOLERANCE = 2  # 大小容差
 DEFAULT_OVERLAP_RATIO = 0.5  # 裁剪重叠比例
@@ -35,7 +35,7 @@ DEFAULT_FILTER_BLACK_TILES = True  # 是否过滤纯黑色小块
 DEFAULT_BLACK_THRESHOLD = 0.95  # 纯黑色判定阈值，超过此比例的黑色像素将被视为纯黑色小块
 
 # 地理感知相关默认参数
-DEFAULT_GEO_AWARE = True  # 是否启用地理感知划分
+DEFAULT_GEO_AWARE = False  # 是否启用地理感知划分
 DEFAULT_GEO_EPS = 2000  # DBSCAN聚类的邻域半径（米）
 DEFAULT_GEO_MIN_SAMPLES = 1  # DBSCAN聚类的最小样本数
 
@@ -737,6 +737,284 @@ def is_acceptable_size_difference(sizes, tolerance=2):
     return width_diff <= tolerance and height_diff <= tolerance
 
 
+# ========================= 新增：流式先切片再划分 ========================= #
+
+def crop_with_padding(img, pixel_box, tile_size, pad_value=0):
+    """
+    从图像裁剪 pixel_box 所示区域，不足处用 pad_value 填充至 tile_size 大小。
+    """
+    x1, y1, x2, y2 = pixel_box
+    tile_w, tile_h = tile_size
+    img_w, img_h = img.size
+
+    crop_box = (
+        max(0, x1),
+        max(0, y1),
+        min(x2, img_w),
+        min(y2, img_h)
+    )
+    region = img.crop(crop_box)
+
+    if img.mode == 'L':
+        canvas = Image.new('L', (tile_w, tile_h), pad_value)
+    else:
+        pv = pad_value if isinstance(pad_value, tuple) else (pad_value,) * len(img.getbands())
+        canvas = Image.new(img.mode, (tile_w, tile_h), pv)
+
+    canvas.paste(region, (0, 0))
+    return canvas
+
+
+def decide_split_for_tile_with_global(
+    val_count, train_count,
+    fg_val_sum, pix_val_sum,
+    global_fg_ratio,
+    val_ratio,
+    tile_fg, tile_pix
+):
+    """
+    使用固定的全局前景比例(global_fg_ratio)进行在线贪心决策。
+    目标：同时逼近数量比例(val_ratio)与前景比例(global_fg_ratio)。
+    返回 'train' 或 'val'。
+    """
+    total_so_far = val_count + train_count
+    # 方案一：放入val
+    val_count_1 = val_count + 1
+    val_fraction_1 = val_count_1 / (total_so_far + 1)
+    fg_val_1 = fg_val_sum + tile_fg
+    pix_val_1 = pix_val_sum + tile_pix
+    val_fg_ratio_1 = (fg_val_1 / pix_val_1) if pix_val_1 > 0 else 0.0
+    obj_1 = abs(val_fraction_1 - val_ratio) + abs(val_fg_ratio_1 - global_fg_ratio)
+
+    # 方案二：放入train
+    val_fraction_2 = val_count / (total_so_far + 1)
+    val_fg_ratio_2 = (fg_val_sum / pix_val_sum) if pix_val_sum > 0 else 0.0
+    obj_2 = abs(val_fraction_2 - val_ratio) + abs(val_fg_ratio_2 - global_fg_ratio)
+
+    if obj_1 < obj_2:
+        return 'val'
+    elif obj_2 < obj_1:
+        return 'train'
+    else:
+        return 'val' if val_fraction_1 < val_ratio else 'train'
+
+
+def process_and_split_dataset_streaming(
+    input_dir, output_dir, tile_size=(256, 256), overlap_ratio=0.5,
+    size_tolerance=2, val_ratio=0.2, create_test_folder=True,
+    overlap_threshold=0.8, filter_black_tiles=True, black_threshold=0.95,
+    seed=666
+):
+    """
+    流式处理（改为两阶段但不落盘暂存）：
+    1) 收集阶段：遍历所有原图与位置，做去重与黑块过滤，计算前景像素并记录tile元数据；不保存像素。
+    2) 划分保存：对收集到的tile随机打乱（seed=666），按数量+前景比例贪心划分，并一次性裁剪保存到train/val；val复制到test。
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    base_names = find_base_names_from_folder(input_dir)
+    if not base_names:
+        print(f"在 {input_dir} 中未找到符合格式的图像")
+        return
+
+    print(f"找到 {len(base_names)} 组原始图像（流式：收集→打乱→划分→保存）")
+
+    train_folders, val_folders, test_folders = create_dataset_folders(output_dir, create_test_folder)
+
+    # 收集阶段
+    collected_tiles = []  # 每项: {base, x, y, pixel_box, geo_box, tile_fg, tile_pix}
+    global_boxes = []     # 去重盒（地理）
+
+    total_generated_tiles = 0
+    total_filtered_overlap_tiles = 0
+    total_filtered_black_tiles = 0
+
+    print("阶段1：收集候选tile（去重与黑块过滤）...")
+
+    for base_name in tqdm(base_names, desc="收集原图"):
+        path_A = os.path.join(input_dir, f"{base_name}_A.tif")
+        path_B = os.path.join(input_dir, f"{base_name}_B.tif")
+        path_D = os.path.join(input_dir, f"{base_name}_D.tif")
+        path_E = os.path.join(input_dir, f"{base_name}_E.png")
+
+        if not all(os.path.exists(p) for p in [path_A, path_B, path_D, path_E]):
+            print(f"警告: 文件集 {base_name} 不完整，跳过")
+            continue
+
+        try:
+            img_A = Image.open(path_A)
+            img_B = Image.open(path_B)
+            img_D = Image.open(path_D)
+            img_E = Image.open(path_E).convert('L')
+            geo_transform = get_geo_transform(path_A)
+        except Exception as e:
+            print(f"警告: 打开文件集 {base_name} 时出错: {e}")
+            continue
+
+        sizes = [img_A.size, img_B.size, img_D.size, img_E.size]
+        if len(set(sizes)) > 1:
+            if is_acceptable_size_difference(sizes, size_tolerance):
+                min_w = min(w for w, h in sizes)
+                min_h = min(h for w, h in sizes)
+                if img_A.size != (min_w, min_h):
+                    img_A = img_A.crop((0, 0, min_w, min_h))
+                if img_B.size != (min_w, min_h):
+                    img_B = img_B.crop((0, 0, min_w, min_h))
+                if img_D.size != (min_w, min_h):
+                    img_D = img_D.crop((0, 0, min_w, min_h))
+                if img_E.size != (min_w, min_h):
+                    img_E = img_E.crop((0, 0, min_w, min_h))
+                print(f"信息: 文件集 {base_name} 尺寸已调整为 {min_w}x{min_h}")
+            else:
+                print(f"警告: 文件集 {base_name} 尺寸差异过大 {sizes}，跳过")
+                continue
+
+        width, height = img_A.size
+        tile_w, tile_h = tile_size
+        stride_w = max(1, int(tile_w * (1 - overlap_ratio)))
+        stride_h = max(1, int(tile_h * (1 - overlap_ratio)))
+        num_cols = math.ceil((width - tile_w) / stride_w) + 1 if width > tile_w else 1
+        num_rows = math.ceil((height - tile_h) / stride_h) + 1 if height > tile_h else 1
+
+        for row in range(num_rows):
+            for col in range(num_cols):
+                x = col * stride_w
+                y = row * stride_h
+                pixel_box = (x, y, x + tile_w, y + tile_h)
+                geo_box = pixel_box_to_geo_box(pixel_box, geo_transform)
+
+                total_generated_tiles += 1
+
+                # 去重在裁剪前
+                if check_overlap_with_existing(geo_box, global_boxes, overlap_threshold):
+                    total_filtered_overlap_tiles += 1
+                    continue
+
+                # 用A判断黑块
+                tile_A_small = crop_with_padding(img_A, pixel_box, tile_size, pad_value=0)
+                if filter_black_tiles and is_black_tile(tile_A_small, black_threshold):
+                    total_filtered_black_tiles += 1
+                    continue
+
+                # 计算前景像素（E）
+                tile_E_small = crop_with_padding(img_E, pixel_box, tile_size, pad_value=0)
+                arr_e = np.array(tile_E_small)
+                tile_fg = int((arr_e > 0).sum())
+                tile_pix = arr_e.shape[0] * arr_e.shape[1]
+
+                collected_tiles.append({
+                    'base': base_name,
+                    'x': x,
+                    'y': y,
+                    'pixel_box': pixel_box,
+                    'geo_box': geo_box,
+                    'tile_fg': tile_fg,
+                    'tile_pix': tile_pix
+                })
+                global_boxes.append(geo_box)
+
+    if not collected_tiles:
+        print("无可用tile，结束。")
+        return
+
+    # 预计算全局前景比例（固定目标）
+    global_fg = sum(t['tile_fg'] for t in collected_tiles)
+    global_pix = sum(t['tile_pix'] for t in collected_tiles)
+    global_fg_ratio = (global_fg / global_pix) if global_pix > 0 else 0.0
+
+    # 打乱（固定种子）
+    rng = np.random.RandomState(seed)
+    rng.shuffle(collected_tiles)
+
+    # 划分 + 保存阶段
+    print("阶段2：随机打乱后划分与保存...")
+
+    val_count = 0
+    train_count = 0
+    fg_val_sum = 0
+    pix_val_sum = 0
+    fg_train_sum = 0
+    pix_train_sum = 0
+
+    total_saved_tiles = 0
+
+    # 为裁剪保存，按原图分组打开，避免频繁打开关闭
+    # 简化实现：逐tile按需打开（保持可读性）
+
+    for t in tqdm(collected_tiles, desc="保存tile"):
+        base_name = t['base']
+        x = t['x']
+        y = t['y']
+        pixel_box = t['pixel_box']
+        tile_fg = t['tile_fg']
+        tile_pix = t['tile_pix']
+
+        split_assignment = decide_split_for_tile_with_global(
+            val_count, train_count,
+            fg_val_sum, pix_val_sum,
+            global_fg_ratio,
+            val_ratio,
+            tile_fg, tile_pix
+        )
+
+        new_base_name = f"{base_name}_original_x{x}_y{y}"
+
+        # 打开图像并实际裁剪、保存
+        path_A = os.path.join(input_dir, f"{base_name}_A.tif")
+        path_B = os.path.join(input_dir, f"{base_name}_B.tif")
+        path_D = os.path.join(input_dir, f"{base_name}_D.tif")
+        path_E = os.path.join(input_dir, f"{base_name}_E.png")
+        try:
+            img_A = Image.open(path_A)
+            img_B = Image.open(path_B)
+            img_D = Image.open(path_D)
+            img_E = Image.open(path_E).convert('L')
+        except Exception as e:
+            print(f"警告: 打开文件集 {base_name} 时出错: {e}")
+            continue
+
+        tile_A_small = crop_with_padding(img_A, pixel_box, tile_size, pad_value=0)
+        tile_B_small = crop_with_padding(img_B, pixel_box, tile_size, pad_value=0)
+        tile_D_small = crop_with_padding(img_D, pixel_box, tile_size, pad_value=0)
+        tile_E_small = crop_with_padding(img_E, pixel_box, tile_size, pad_value=0)
+
+        target = train_folders if split_assignment == 'train' else val_folders
+        try:
+            tile_A_small.save(os.path.join(target['A'], f"{new_base_name}.png"), "PNG")
+            tile_B_small.save(os.path.join(target['B'], f"{new_base_name}.png"), "PNG")
+            tile_D_small.save(os.path.join(target['C'], f"{new_base_name}.png"), "PNG")
+            tile_E_small.save(os.path.join(target['label'], f"{new_base_name}.png"), "PNG")
+
+            if split_assignment == 'val' and create_test_folder and test_folders:
+                tile_A_small.save(os.path.join(test_folders['A'], f"{new_base_name}.png"), "PNG")
+                tile_B_small.save(os.path.join(test_folders['B'], f"{new_base_name}.png"), "PNG")
+                tile_D_small.save(os.path.join(test_folders['C'], f"{new_base_name}.png"), "PNG")
+                tile_E_small.save(os.path.join(test_folders['label'], f"{new_base_name}.png"), "PNG")
+
+            total_saved_tiles += 1
+
+            if split_assignment == 'val':
+                val_count += 1
+                fg_val_sum += tile_fg
+                pix_val_sum += tile_pix
+            else:
+                train_count += 1
+                fg_train_sum += tile_fg
+                pix_train_sum += tile_pix
+        except Exception as e:
+            print(f"保存小块时出错: {e}")
+
+    print("\n处理完成（流式）！")
+    print(f"训练集: {train_count} 个小块")
+    print(f"验证集: {val_count} 个小块")
+    if create_test_folder:
+        print(f"测试集: {val_count} 个小块 (与验证集相同)")
+    print(f"总共生成 {total_generated_tiles} 个小块，保存 {total_saved_tiles} 个小块")
+    print(f"重叠度阈值: {overlap_threshold * 100:.1f}%")
+    print(f"总共过滤了 {total_filtered_overlap_tiles} 个重叠小块 和 {total_filtered_black_tiles} 个纯黑色小块")
+
+
 def create_dataset_folders(output_dir, create_test_folder=True):
     """
     创建数据集文件夹结构
@@ -1341,24 +1619,19 @@ def main():
     if filter_black_tiles:
         print(f"  纯黑色判定阈值: {black_threshold * 100:.1f}%")
     print(f"  允许的尺寸差异: {size_tolerance}像素")
-    print(f"  🌍 地理感知划分: {'启用' if geo_aware else '禁用'}")
-    if geo_aware:
-        print(f"  地理聚类邻域半径: {geo_eps}米")
-        print(f"  地理聚类最小样本数: {geo_min_samples}")
-        if not SKLEARN_AVAILABLE:
-            print(f"  ⚠️  sklearn不可用，将回退到随机划分")
+    print(f"  划分策略: 流式tile级划分（数量+前景比例），无地理隔离")
+    print(f"  随机种子: 666")
     print(f"  几何变换数据增强: 已禁用 (训练时在线增强)")
 
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 处理数据集
-    process_and_split_dataset(
-        args.input_dir, args.output_dir, tile_size, overlap_ratio, size_tolerance,
-        val_ratio, create_test_folder, apply_augmentation,
-        apply_h_flip, apply_v_flip, apply_rot90, apply_rot180, apply_rot270,
+    # 处理数据集（新流程：流式切片+去重+划分，一次落盘）
+    process_and_split_dataset_streaming(
+        args.input_dir, args.output_dir, tile_size, overlap_ratio,
+        size_tolerance, val_ratio, create_test_folder,
         overlap_threshold, filter_black_tiles, black_threshold,
-        geo_aware=geo_aware, geo_eps=geo_eps, geo_min_samples=geo_min_samples
+        seed=666
     )
 
     # 验证输出数据集结构
