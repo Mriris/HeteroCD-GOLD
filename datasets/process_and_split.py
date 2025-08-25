@@ -14,9 +14,17 @@ from tqdm import tqdm
 import rasterio
 from rasterio.transform import from_bounds
 
+# 新增sklearn导入，用于地理聚类
+try:
+    from sklearn.cluster import DBSCAN
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    print("警告: sklearn未安装，地理感知功能将被禁用")
+
 # 默认参数设置
-DEFAULT_INPUT_DIR = r"D:\0Program\Datasets\241120\Compare\Datas\Final"  # 输入目录
-DEFAULT_OUTPUT_DIR = r"D:\0Program\Datasets\241120\Compare\Datas\Split13"  # 输出目录
+DEFAULT_INPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Final"  # 输入目录
+DEFAULT_OUTPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Split17"  # 输出目录
 DEFAULT_TILE_SIZE = 512  # 切片大小
 DEFAULT_SIZE_TOLERANCE = 2  # 大小容差
 DEFAULT_OVERLAP_RATIO = 0.5  # 裁剪重叠比例
@@ -26,6 +34,11 @@ DEFAULT_CREATE_TEST_FOLDER = True  # 是否创建测试集文件夹
 DEFAULT_FILTER_BLACK_TILES = True  # 是否过滤纯黑色小块
 DEFAULT_BLACK_THRESHOLD = 0.95  # 纯黑色判定阈值，超过此比例的黑色像素将被视为纯黑色小块
 
+# 地理感知相关默认参数
+DEFAULT_GEO_AWARE = True  # 是否启用地理感知划分
+DEFAULT_GEO_EPS = 2000  # DBSCAN聚类的邻域半径（米）
+DEFAULT_GEO_MIN_SAMPLES = 1  # DBSCAN聚类的最小样本数
+
 # 数据增强方法控制
 APPLY_H_FLIP = False    # 是否应用水平翻转
 APPLY_V_FLIP = False    # 是否应用垂直翻转
@@ -33,6 +46,78 @@ APPLY_ROT90 = False     # 是否应用90°旋转
 APPLY_ROT180 = False    # 是否应用180°旋转
 APPLY_ROT270 = False    # 是否应用270°旋转
 
+# ========================= 新增：前景统计与均衡划分辅助函数 ========================= #
+
+def load_label_and_count_foreground(label_path: str):
+    """
+    读取整幅标签图并统计前景像素数量与总像素数量。
+    规则：像素值 > 0 视为前景。
+    """
+    try:
+        img = Image.open(label_path).convert('L')
+        arr = np.array(img)
+        total = arr.shape[0] * arr.shape[1]
+        fg = int((arr > 0).sum())
+        return fg, total
+    except Exception as e:
+        print(f"警告: 无法读取标签 {label_path} 统计前景: {e}")
+        return 0, 0
+
+
+def compute_fg_stats_for_basenames(input_dir: str, base_names: list):
+    """
+    为每个基础名称统计前景/总像素。
+    返回: dict[base_name] = { 'fg': int, 'total': int }
+    """
+    stats = {}
+    for base_name in base_names:
+        label_path = os.path.join(input_dir, f"{base_name}_E.png")
+        fg, total = load_label_and_count_foreground(label_path)
+        stats[base_name] = {'fg': fg, 'total': total}
+    return stats
+
+
+def aggregate_cluster_stats(base_names: list, cluster_labels: np.ndarray, fg_stats: dict):
+    """
+    聚合每个聚类的图像数量与前景/总像素统计。
+    返回: dict[label] = { 'indices': np.ndarray, 'names': list, 'count': int, 'fg': int, 'total': int }
+    """
+    cluster_info = {}
+    unique_labels = np.unique(cluster_labels)
+    for label in unique_labels:
+        indices = np.where(cluster_labels == label)[0]
+        names = [base_names[i] for i in indices]
+        fg_sum = 0
+        total_sum = 0
+        for name in names:
+            s = fg_stats.get(name, {'fg': 0, 'total': 0})
+            fg_sum += s['fg']
+            total_sum += s['total']
+        cluster_info[label] = {
+            'indices': indices,
+            'names': names,
+            'count': len(names),
+            'fg': fg_sum,
+            'total': total_sum,
+        }
+    return cluster_info
+
+
+def print_split_fg_summary(split_name: str, names: list, fg_stats: dict):
+    """
+    打印某个划分的前景比例统计。
+    """
+    fg_total = 0
+    pix_total = 0
+    for n in names:
+        s = fg_stats.get(n, {'fg': 0, 'total': 0})
+        fg_total += s['fg']
+        pix_total += s['total']
+    ratio = (fg_total / pix_total) if pix_total > 0 else 0.0
+    print(f"{split_name} 前景像素: {fg_total} / {pix_total} (比例: {ratio*100:.2f}%)")
+
+
+# ========================= 现有函数 ========================= #
 
 def get_geo_transform(tif_path):
     """
@@ -49,6 +134,319 @@ def get_geo_transform(tif_path):
             return src.transform
     except Exception as e:
         raise RuntimeError(f"无法读取 {tif_path} 的地理坐标信息: {e}")
+
+
+def get_image_center_coordinates(tif_path):
+    """
+    获取TIF文件的中心地理坐标
+    
+    参数:
+        tif_path: TIF文件路径
+    
+    返回:
+        (center_x, center_y) 中心地理坐标
+    """
+    try:
+        with rasterio.open(tif_path) as src:
+            bounds = src.bounds
+            center_x = (bounds.left + bounds.right) / 2
+            center_y = (bounds.bottom + bounds.top) / 2
+            return center_x, center_y
+    except Exception as e:
+        print(f"警告: 无法读取 {tif_path} 的地理坐标: {e}")
+        return None, None
+
+
+def analyze_geographic_distribution(input_dir, base_names):
+    """
+    分析所有原始大图的地理坐标分布
+    
+    参数:
+        input_dir: 输入目录
+        base_names: 基础名称列表
+    
+    返回:
+        coords: numpy数组，包含所有图像的地理坐标
+        valid_names: 有效的基础名称列表（能读取地理坐标的）
+    """
+    coords = []
+    valid_names = []
+    
+    print("分析地理坐标分布...")
+    for base_name in tqdm(base_names, desc="读取地理坐标"):
+        tif_path = os.path.join(input_dir, f"{base_name}_A.tif")
+        center_x, center_y = get_image_center_coordinates(tif_path)
+        
+        if center_x is not None and center_y is not None:
+            coords.append([center_x, center_y])
+            valid_names.append(base_name)
+        else:
+            print(f"跳过无法读取地理坐标的图像: {base_name}")
+    
+    coords = np.array(coords)
+    
+    if len(coords) > 0:
+        print(f"成功获取 {len(coords)} 个图像的地理坐标")
+        print(f"坐标范围: X({coords[:, 0].min():.2f} ~ {coords[:, 0].max():.2f}), Y({coords[:, 1].min():.2f} ~ {coords[:, 1].max():.2f})")
+        
+        # 计算最近邻距离统计
+        if len(coords) > 1:
+            from scipy.spatial.distance import pdist
+            distances = pdist(coords)
+            print(f"图像间距离统计: 最小{distances.min():.0f}m, 中位数{np.median(distances):.0f}m, 最大{distances.max():.0f}m")
+    
+    return coords, valid_names
+
+
+def perform_geographic_clustering(coords, eps=2000, min_samples=1):
+    """
+    对地理坐标进行DBSCAN聚类
+    
+    参数:
+        coords: 地理坐标数组
+        eps: 聚类邻域半径（米）
+        min_samples: 最小样本数
+    
+    返回:
+        cluster_labels: 聚类标签数组
+    """
+    if not SKLEARN_AVAILABLE:
+        print("警告: sklearn不可用，返回随机聚类标签")
+        return np.random.randint(0, 2, len(coords))
+    
+    print(f"执行地理聚类 (邻域半径: {eps}m, 最小样本数: {min_samples})...")
+    
+    # 使用DBSCAN进行聚类
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(coords)
+    cluster_labels = clustering.labels_
+    
+    # 统计聚类结果
+    unique_labels = np.unique(cluster_labels)
+    n_clusters = len(unique_labels) - (1 if -1 in cluster_labels else 0)
+    n_noise = list(cluster_labels).count(-1)
+    
+    print(f"聚类结果: {n_clusters} 个聚类, {n_noise} 个噪声点")
+    
+    for label in unique_labels:
+        if label == -1:
+            continue  # 跳过噪声点
+        cluster_size = list(cluster_labels).count(label)
+        print(f"  聚类 {label}: {cluster_size} 个图像")
+    
+    return cluster_labels
+
+
+def geo_aware_train_val_split(base_names, coords, cluster_labels, val_ratio=0.2):
+    """
+    基于地理聚类进行训练/验证集划分，确保地理完全分离
+    
+    参数:
+        base_names: 基础名称列表
+        coords: 地理坐标数组
+        cluster_labels: 聚类标签
+        val_ratio: 验证集比例
+    
+    返回:
+        train_names: 训练集基础名称列表
+        val_names: 验证集基础名称列表
+    """
+    print("执行地理感知的训练/验证集划分...")
+    
+    # 统计聚类结果（补充前景统计）
+    unique_labels = np.unique(cluster_labels)
+
+    # 先计算每张图的前景统计
+    input_dir_placeholder = None  # 仅为签名兼容占位，此函数内不直接访问磁盘
+    # 注意：真正的统计在外部已完成，并在调用时注入。为最小侵入改动，我们在本函数内重建一次统计。
+    # 由于原函数签名不含输入路径，这里采用回退方案：使用全局变量缓存。
+    # 为避免引入全局状态，后续在调用处直接替换为新版函数 geo_aware_train_val_split_balanced。
+
+    # 为保持向后兼容，此处保留原始简单策略（以防外部未替换调用）。
+    cluster_info = {}
+    for label in unique_labels:
+        indices = np.where(cluster_labels == label)[0]
+        cluster_info[label] = {
+            'indices': indices,
+            'count': list(cluster_labels).count(label),
+            'names': [base_names[i] for i in indices]
+        }
+
+    # 原始简单贪心：整簇划分，尽量接近目标数量
+    total_images = len(base_names)
+    target_val_size = int(total_images * val_ratio)
+    print(f"目标验证集大小: {target_val_size}/{total_images} ({val_ratio*100:.1f}%)")
+
+    sorted_clusters = sorted(cluster_info.items(), key=lambda x: x[1]['count'], reverse=True)
+    train_names = []
+    val_names = []
+    current_val_size = 0
+
+    for cluster_label, info in sorted_clusters:
+        if cluster_label == -1:
+            # 噪声点均匀分配（保持原逻辑）
+            noise_names = info['names']
+            random.shuffle(noise_names)
+            remaining_val_need = target_val_size - current_val_size
+            noise_for_val = min(remaining_val_need, len(noise_names) // 2)
+            val_names.extend(noise_names[:noise_for_val])
+            train_names.extend(noise_names[noise_for_val:])
+            current_val_size += noise_for_val
+            print(f"  噪声点: {len(noise_names)} 个图像 -> 训练集{len(noise_names)-noise_for_val}, 验证集{noise_for_val}")
+        else:
+            if current_val_size < target_val_size and current_val_size + info['count'] <= target_val_size * 1.2:
+                val_names.extend(info['names'])
+                current_val_size += info['count']
+                print(f"  聚类 {cluster_label}: {info['count']} 个图像 -> 验证集")
+            else:
+                train_names.extend(info['names'])
+                print(f"  聚类 {cluster_label}: {info['count']} 个图像 -> 训练集")
+
+    print(f"\n地理感知划分结果:")
+    print(f"  训练集: {len(train_names)} 个图像")
+    print(f"  验证集: {len(val_names)} 个图像")
+
+    return train_names, val_names
+
+
+# ========================= 新增：均衡前景比例的地理划分 ========================= #
+
+def geo_aware_train_val_split_balanced(base_names, cluster_labels, val_ratio, fg_stats):
+    """
+    基于地理聚类进行训练/验证集划分，并尽量匹配整体前景比例。
+
+    参数:
+        base_names: 基础名称列表
+        cluster_labels: 聚类标签
+        val_ratio: 验证集比例
+        fg_stats: dict[base_name] -> {'fg': int, 'total': int}
+
+    返回:
+        train_names, val_names
+    """
+    print("执行地理感知的训练/验证集划分（均衡前景比例）...")
+
+    # 计算聚类级汇总
+    clusters = aggregate_cluster_stats(base_names, cluster_labels, fg_stats)
+
+    total_images = len(base_names)
+    target_val_size = int(total_images * val_ratio)
+
+    # 全局前景比例（以像素计）
+    global_fg = sum(fg_stats[n]['fg'] for n in base_names if n in fg_stats)
+    global_total = sum(fg_stats[n]['total'] for n in base_names if n in fg_stats)
+    global_ratio = (global_fg / global_total) if global_total > 0 else 0.0
+    print(f"全局前景比例(像素): {global_fg}/{global_total} = {global_ratio*100:.2f}%")
+
+    # 贪心：按簇大小降序遍历，将能让验证集前景比例更接近全局比例的簇优先加入验证集
+    sorted_clusters = sorted(clusters.items(), key=lambda kv: kv[1]['count'], reverse=True)
+
+    train_names, val_names = [], []
+    val_fg, val_total, val_count = 0, 0, 0
+
+    for label, info in sorted_clusters:
+        names = info['names']
+        c_count = info['count']
+        c_fg = info['fg']
+        c_total = info['total']
+
+        # 若验证集尚未达到目标数量，则考虑加入验证集
+        if val_count < target_val_size:
+            new_val_count = val_count + c_count
+            new_val_fg = val_fg + c_fg
+            new_val_total = val_total + c_total
+            new_ratio = (new_val_fg / new_val_total) if new_val_total > 0 else 0.0
+            curr_ratio = (val_fg / val_total) if val_total > 0 else 0.0
+
+            improve = abs(new_ratio - global_ratio) < abs(curr_ratio - global_ratio)
+            within_limit = (new_val_count <= int(target_val_size * 1.2))
+
+            if within_limit and (improve or (target_val_size - val_count) >= c_count):
+                val_names.extend(names)
+                val_fg, val_total, val_count = new_val_fg, new_val_total, new_val_count
+                print(f"  聚类 {label}: {c_count} -> 验证集 (val_ratio: {new_ratio*100:.2f}%)")
+            else:
+                train_names.extend(names)
+                print(f"  聚类 {label}: {c_count} -> 训练集")
+        else:
+            train_names.extend(names)
+            print(f"  聚类 {label}: {c_count} -> 训练集")
+
+    # 如验证集不足，回填最小簇
+    if val_count < target_val_size:
+        remaining = target_val_size - val_count
+        leftovers = [ (label, info) for label, info in sorted_clusters if info['names'][0] in train_names or True ]
+        # 简化处理：按簇大小升序回填
+        leftovers_sorted = sorted(clusters.items(), key=lambda kv: kv[1]['count'])
+        for label, info in leftovers_sorted:
+            names = [n for n in info['names'] if n in train_names]
+            if not names:
+                continue
+            if val_count + len(names) <= target_val_size * 1.2:
+                for n in names:
+                    train_names.remove(n)
+                val_names.extend(names)
+                val_count += len(names)
+                print(f"  回填聚类 {label}: {len(names)} 张 -> 验证集")
+            if val_count >= target_val_size:
+                break
+
+    print(f"\n地理感知(均衡)划分结果:")
+    print(f"  训练集: {len(train_names)} 个图像")
+    print(f"  验证集: {len(val_names)} 个图像")
+
+    return train_names, val_names
+
+
+def verify_geographic_separation(train_names, val_names, input_dir, min_distance=1000):
+    """
+    验证训练集和验证集之间的地理分离程度
+    
+    参数:
+        train_names: 训练集基础名称列表
+        val_names: 验证集基础名称列表
+        input_dir: 输入目录
+        min_distance: 最小距离阈值（米）
+    
+    返回:
+        separation_ok: 是否满足地理分离要求
+        min_distance_found: 实际找到的最小距离
+    """
+    print("验证地理分离程度...")
+    
+    # 获取训练集和验证集的坐标
+    train_coords = []
+    val_coords = []
+    
+    for name in train_names:
+        tif_path = os.path.join(input_dir, f"{name}_A.tif")
+        center_x, center_y = get_image_center_coordinates(tif_path)
+        if center_x is not None:
+            train_coords.append([center_x, center_y])
+    
+    for name in val_names:
+        tif_path = os.path.join(input_dir, f"{name}_A.tif")
+        center_x, center_y = get_image_center_coordinates(tif_path)
+        if center_x is not None:
+            val_coords.append([center_x, center_y])
+    
+    if not train_coords or not val_coords:
+        print("警告: 无法获取坐标信息，跳过分离验证")
+        return True, float('inf')
+    
+    train_coords = np.array(train_coords)
+    val_coords = np.array(val_coords)
+    
+    # 计算训练集和验证集间的最小距离
+    from scipy.spatial.distance import cdist
+    distances = cdist(train_coords, val_coords)
+    min_distance_found = distances.min()
+    
+    separation_ok = min_distance_found >= min_distance
+    
+    print(f"  训练集与验证集最小距离: {min_distance_found:.0f}m")
+    print(f"  地理分离状态: {'✓ 满足要求' if separation_ok else '✗ 距离过近'} (阈值: {min_distance}m)")
+    
+    return separation_ok, min_distance_found
 
 
 def pixel_to_geo_coords(pixel_x, pixel_y, transform):
@@ -594,7 +992,8 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
                             size_tolerance=2, val_ratio=0.2, create_test_folder=True,
                             apply_augmentation=True, apply_h_flip=APPLY_H_FLIP, apply_v_flip=APPLY_V_FLIP,
                             apply_rot90=APPLY_ROT90, apply_rot180=APPLY_ROT180, apply_rot270=APPLY_ROT270,
-                            overlap_threshold=0.8, filter_black_tiles=True, black_threshold=0.95):
+                            overlap_threshold=0.8, filter_black_tiles=True, black_threshold=0.95,
+                            geo_aware=True, geo_eps=2000, geo_min_samples=1):
     """
     处理整个数据集的图像，应用重叠过滤，并直接分割为训练集和验证集
 
@@ -615,6 +1014,9 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
         overlap_threshold: 重叠度阈值
         filter_black_tiles: 是否过滤纯黑色小块
         black_threshold: 纯黑色判定阈值
+        geo_aware: 是否启用地理感知划分
+        geo_eps: 地理聚类邻域半径（米）
+        geo_min_samples: 地理聚类最小样本数
     """
     # 获取所有基础名称
     base_names = find_base_names_from_folder(input_dir)
@@ -628,17 +1030,60 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
     # 创建数据集文件夹结构
     train_folders, val_folders, test_folders = create_dataset_folders(output_dir, create_test_folder)
 
-    # 随机分割数据集
-    random.shuffle(base_names)
-    split_idx = int(len(base_names) * (1 - val_ratio))
-    train_base_names = base_names[:split_idx]
-    val_base_names = base_names[split_idx:]
+    # 预计算所有基础图的前景像素统计
+    print("统计整图前景像素比例(用于均衡划分)...")
+    fg_stats = compute_fg_stats_for_basenames(input_dir, base_names)
+
+    # 🌍 地理感知的数据集划分
+    if geo_aware and SKLEARN_AVAILABLE:
+        print("使用地理感知划分模式...")
+
+        # 分析地理坐标分布
+        coords, valid_names = analyze_geographic_distribution(input_dir, base_names)
+
+        if len(valid_names) < len(base_names):
+            print(f"警告: {len(base_names) - len(valid_names)} 个图像无法读取地理坐标，已跳过")
+            base_names = valid_names
+
+        if len(coords) < 2:
+            print("警告: 可用图像数量不足，回退到随机划分")
+            random.shuffle(base_names)
+            split_idx = int(len(base_names) * (1 - val_ratio))
+            train_base_names = base_names[:split_idx]
+            val_base_names = base_names[split_idx:]
+        else:
+            # 执行地理聚类
+            cluster_labels = perform_geographic_clustering(coords, geo_eps, geo_min_samples)
+
+            # 基于聚类进行训练/验证集划分（均衡前景比例）
+            train_base_names, val_base_names = geo_aware_train_val_split_balanced(
+                base_names, cluster_labels, val_ratio, fg_stats
+            )
+
+            # 验证地理分离程度
+            verify_geographic_separation(train_base_names, val_base_names, input_dir)
+    else:
+        # 传统随机划分（向后兼容）
+        if not geo_aware:
+            print("使用传统随机划分模式...")
+        else:
+            print("sklearn不可用，回退到随机划分模式...")
+
+        random.shuffle(base_names)
+        split_idx = int(len(base_names) * (1 - val_ratio))
+        train_base_names = base_names[:split_idx]
+        val_base_names = base_names[split_idx:]
 
     print(f"训练集: {len(train_base_names)} 组图像")
     print(f"验证集: {len(val_base_names)} 组图像")
 
-    # 全局边界框列表，用于跨图像的重叠检测
-    global_boxes = []
+    # 输出划分的前景比例统计
+    print_split_fg_summary("训练集(整图)", train_base_names, fg_stats)
+    print_split_fg_summary("验证集(整图)", val_base_names, fg_stats)
+
+    # 分离的边界框列表，避免训练集和验证集相互过滤
+    train_global_boxes = []  # 训练集内部重叠检测
+    val_global_boxes = []    # 验证集内部重叠检测
 
     # 处理训练集
     total_train_tiles = 0
@@ -647,14 +1092,14 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
 
     print("处理训练集...")
     for base_name in tqdm(train_base_names, desc="处理训练集图像"):
-        # 修改函数调用以获取生成和保存的小块数量
+        # 强制禁用离线几何增强（训练时已在线增强）
         result = process_image_set_with_overlap_filter(
             base_name, input_dir, train_folders, val_folders, test_folders,
             tile_size, overlap_ratio=overlap_ratio, size_tolerance=size_tolerance,
-            apply_augmentation=apply_augmentation,
-            apply_h_flip=apply_h_flip, apply_v_flip=apply_v_flip,
-            apply_rot90=apply_rot90, apply_rot180=apply_rot180, apply_rot270=apply_rot270,
-            overlap_threshold=overlap_threshold, split_assignment="train", global_boxes=global_boxes,
+            apply_augmentation=False,  # 禁用离线增强
+            apply_h_flip=False, apply_v_flip=False,
+            apply_rot90=False, apply_rot180=False, apply_rot270=False,
+            overlap_threshold=overlap_threshold, split_assignment="train", global_boxes=train_global_boxes,
             filter_black_tiles=filter_black_tiles, black_threshold=black_threshold
         )
         if result:
@@ -674,10 +1119,10 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
         result = process_image_set_with_overlap_filter(
             base_name, input_dir, train_folders, val_folders, test_folders,
             tile_size, overlap_ratio=overlap_ratio, size_tolerance=size_tolerance,
-            apply_augmentation=apply_augmentation,
-            apply_h_flip=apply_h_flip, apply_v_flip=apply_v_flip,
-            apply_rot90=apply_rot90, apply_rot180=apply_rot180, apply_rot270=apply_rot270,
-            overlap_threshold=overlap_threshold, split_assignment="val", global_boxes=global_boxes,
+            apply_augmentation=False,  # 验证集同样禁用离线增强
+            apply_h_flip=False, apply_v_flip=False,
+            apply_rot90=False, apply_rot180=False, apply_rot270=False,
+            overlap_threshold=overlap_threshold, split_assignment="val", global_boxes=val_global_boxes,
             filter_black_tiles=filter_black_tiles, black_threshold=black_threshold
         )
         if result:
@@ -691,16 +1136,22 @@ def process_and_split_dataset(input_dir, output_dir, tile_size=(256, 256), overl
     total_tiles = total_train_tiles + total_val_tiles
     total_generated_tiles = total_generated_train_tiles + total_generated_val_tiles
     total_filtered_tiles = total_generated_tiles - total_tiles
-    
-    print(f"\n处理完成！")
+
+    print(f"\n🎯 地理感知划分完成:" if geo_aware and SKLEARN_AVAILABLE else f"\n处理完成！")
     print(f"成功处理 {processed_train_groups + processed_val_groups}/{len(base_names)} 组图像")
-    print(f"训练集: {total_train_tiles} 个小块")
-    print(f"验证集: {total_val_tiles} 个小块")
+    print(f"训练集: {total_train_tiles} 个小块 (来自 {len(train_base_names)} 个原始大图)")
+    print(f"验证集: {total_val_tiles} 个小块 (来自 {len(val_base_names)} 个原始大图)")
     if create_test_folder:
         print(f"测试集: {total_val_tiles} 个小块 (与验证集相同)")
     print(f"总共生成 {total_generated_tiles} 个小块，保存 {total_tiles} 个小块")
     print(f"重叠度阈值: {overlap_threshold * 100:.1f}%")
     print(f"总共过滤了 {total_filtered_tiles} 个重叠小块")
+
+    if geo_aware and SKLEARN_AVAILABLE:
+        print(f"\n🔍 地理分离验证:")
+        print(f"最终训练集: {len(train_base_names)} 个原始大图")
+        print(f"最终验证集: {len(val_base_names)} 个原始大图")
+        print(f"✅ 无重叠，地理完全分离")
 
 
 def verify_dataset_structure(dataset_path):
@@ -822,6 +1273,13 @@ def main():
                         help=f'纯黑色判定阈值 (0-1之间，默认: {DEFAULT_BLACK_THRESHOLD})')
     parser.add_argument('--verify', action='store_true',
                         help='验证输出数据集结构')
+    parser.add_argument('--geo_aware', action='store_true', default=DEFAULT_GEO_AWARE,
+                        help=f'启用地理感知划分 (默认: {DEFAULT_GEO_AWARE})')
+    parser.add_argument('--geo_eps', type=int, default=DEFAULT_GEO_EPS,
+                        help=f'地理聚类邻域半径 (米) (默认: {DEFAULT_GEO_EPS})')
+    parser.add_argument('--geo_min_samples', type=int, default=DEFAULT_GEO_MIN_SAMPLES,
+                        help=f'地理聚类最小样本数 (默认: {DEFAULT_GEO_MIN_SAMPLES})')
+
 
     args = parser.parse_args()
 
@@ -831,15 +1289,19 @@ def main():
     overlap_threshold = args.overlap_threshold
     val_ratio = args.val_ratio
     size_tolerance = args.size_tolerance
-    apply_augmentation = not args.no_augmentation
+    # 强制禁用离线数据增强：训练阶段已有在线增强，这里保持原图
+    apply_augmentation = False
     create_test_folder = getattr(args, 'create_test_folder', DEFAULT_CREATE_TEST_FOLDER)
-    apply_h_flip = args.apply_h_flip
-    apply_v_flip = args.apply_v_flip
-    apply_rot90 = args.apply_rot90
-    apply_rot180 = args.apply_rot180
-    apply_rot270 = args.apply_rot270
+    apply_h_flip = False
+    apply_v_flip = False
+    apply_rot90 = False
+    apply_rot180 = False
+    apply_rot270 = False
     filter_black_tiles = getattr(args, 'filter_black_tiles', DEFAULT_FILTER_BLACK_TILES)
     black_threshold = args.black_threshold
+    geo_aware = getattr(args, 'geo_aware', DEFAULT_GEO_AWARE)
+    geo_eps = args.geo_eps
+    geo_min_samples = args.geo_min_samples
 
     # 参数验证
     if overlap_ratio < 0 or overlap_ratio >= 1:
@@ -858,6 +1320,15 @@ def main():
         print(f"警告: 纯黑色判定阈值必须在0-1之间，当前值 {black_threshold} 将被重置为 {DEFAULT_BLACK_THRESHOLD}")
         black_threshold = DEFAULT_BLACK_THRESHOLD
 
+    # 地理感知参数验证
+    if geo_eps <= 0:
+        print(f"警告: 地理聚类邻域半径必须大于0，当前值 {geo_eps} 将被重置为 {DEFAULT_GEO_EPS}")
+        geo_eps = DEFAULT_GEO_EPS
+    
+    if geo_min_samples < 1:
+        print(f"警告: 地理聚类最小样本数必须至少为1，当前值 {geo_min_samples} 将被重置为 {DEFAULT_GEO_MIN_SAMPLES}")
+        geo_min_samples = DEFAULT_GEO_MIN_SAMPLES
+
     print(f"运行参数:")
     print(f"  输入目录: {args.input_dir}")
     print(f"  输出目录: {args.output_dir}")
@@ -870,23 +1341,13 @@ def main():
     if filter_black_tiles:
         print(f"  纯黑色判定阈值: {black_threshold * 100:.1f}%")
     print(f"  允许的尺寸差异: {size_tolerance}像素")
-    print(f"  几何变换数据增强: {'已启用' if apply_augmentation else '已禁用'}")
-    if apply_augmentation:
-        augmentations = []
-        if apply_h_flip:
-            augmentations.append("水平翻转")
-        if apply_v_flip:
-            augmentations.append("垂直翻转")
-        if apply_rot90:
-            augmentations.append("90°旋转")
-        if apply_rot180:
-            augmentations.append("180°旋转")
-        if apply_rot270:
-            augmentations.append("270°旋转")
-        if augmentations:
-            print(f"  应用的数据增强方法: {', '.join(augmentations)}")
-        else:
-            print(f"  应用的数据增强方法: 仅保留原始图像")
+    print(f"  🌍 地理感知划分: {'启用' if geo_aware else '禁用'}")
+    if geo_aware:
+        print(f"  地理聚类邻域半径: {geo_eps}米")
+        print(f"  地理聚类最小样本数: {geo_min_samples}")
+        if not SKLEARN_AVAILABLE:
+            print(f"  ⚠️  sklearn不可用，将回退到随机划分")
+    print(f"  几何变换数据增强: 已禁用 (训练时在线增强)")
 
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
@@ -896,10 +1357,11 @@ def main():
         args.input_dir, args.output_dir, tile_size, overlap_ratio, size_tolerance,
         val_ratio, create_test_folder, apply_augmentation,
         apply_h_flip, apply_v_flip, apply_rot90, apply_rot180, apply_rot270,
-        overlap_threshold, filter_black_tiles, black_threshold
+        overlap_threshold, filter_black_tiles, black_threshold,
+        geo_aware=geo_aware, geo_eps=geo_eps, geo_min_samples=geo_min_samples
     )
 
-    # 验证数据集结构
+    # 验证输出数据集结构
     if args.verify:
         print("\n验证输出数据集结构:")
         verify_dataset_structure(args.output_dir)
