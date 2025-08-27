@@ -23,8 +23,8 @@ except ImportError:
     print("警告: sklearn未安装，地理感知功能将被禁用")
 
 # 默认参数设置
-DEFAULT_INPUT_DIR = r"C:\1DataSets\241120\Compare\Datas\Final"  # 输入目录
-DEFAULT_OUTPUT_DIR = r"C:\1DataSets\241120\Compare\Datas\Split19"  # 输出目录
+DEFAULT_INPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Final"  # 输入目录
+DEFAULT_OUTPUT_DIR = r"/data/jingwei/yantingxuan/Datasets/CityCN/Split20"  # 输出目录
 DEFAULT_TILE_SIZE = 512  # 切片大小
 DEFAULT_SIZE_TOLERANCE = 2  # 大小容差
 DEFAULT_OVERLAP_RATIO = 0.5  # 裁剪重叠比例

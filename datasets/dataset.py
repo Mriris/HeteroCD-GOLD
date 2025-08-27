@@ -411,7 +411,7 @@ def get_transform(opt, params=None, grayscale=False, method=transforms.Interpola
         if grayscale:
             transform_list += [transforms.Normalize((0.5,), (0.5,))]
         else:
-            transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+            transform_list += [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))]
     return transforms.Compose(transform_list)
 
 
@@ -469,7 +469,7 @@ class Data(data.Dataset):
         if self.load_t2_opt:
             img_C = io.imread(self.imgs_list_C[idx])
         
-        transform_list = [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        transform_list = [transforms.ToTensor(), transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))]
         self.img_transform = transforms.Compose(transform_list)
         label = self.labels[idx] // 255
         

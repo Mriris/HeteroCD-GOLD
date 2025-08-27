@@ -396,6 +396,16 @@ class TripleHeteCD(BaseModel):
     def backward_G(self):
         """计算生成器的损失并进行反向传播"""
         self.compute_losses()  # 计算损失
+        
+        # 损失异常检测
+        if torch.isnan(self.loss_G) or torch.isinf(self.loss_G) or self.loss_G.item() > 1000:
+            print(f"🚨 检测到异常损失值: {self.loss_G.item()}")
+            print(f"  - CD损失: {self.loss_CD.item() if hasattr(self, 'loss_CD') else 'N/A'}")
+            print(f"  - 蒸馏损失: {self.loss_Distill.item() if hasattr(self, 'loss_Distill') else 'N/A'}")
+            print(f"  - 注意力损失: {self.loss_Diff_Att.item() if hasattr(self, 'loss_Diff_Att') else 'N/A'}")
+            print(f"⚠️  为防止梯度爆炸，跳过当前批次的反向传播")
+            return
+        
         self.loss_G.backward()  # 反向传播
 
     def optimize_parameters(self, epoch):
@@ -411,6 +421,12 @@ class TripleHeteCD(BaseModel):
         self.forward_CD()  # 计算前向传播
         self.optimizer_G.zero_grad()  # 清空梯度
         self.backward_G()  # 计算损失并反向传播
+        
+        # 添加梯度裁剪防止梯度爆炸
+        import torch.nn.utils
+        gradient_clip_norm = getattr(self.opt, 'gradient_clip_norm', 0.5)
+        torch.nn.utils.clip_grad_norm_(self.netCD.parameters(), max_norm=gradient_clip_norm)
+        
         self.optimizer_G.step()  # 更新参数
         return self.change_pred  # 返回变化检测结果
 

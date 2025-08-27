@@ -199,7 +199,7 @@ def predict(net, test_dir, pred_dir):
     for img_A, img_B, label, filename in zip(images_A, images_B, labels, filenames):
         # img_A = torch.from_numpy(img_A).permute(2, 0, 1).unsqueeze(0).cuda().float()
         # img_B = torch.from_numpy(img_B).permute(2, 0, 1).unsqueeze(0).cuda().float()
-        transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        transform_list = [transforms.ToTensor(),transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))]
         img_transform = transforms.Compose(transform_list)
         img_A = img_transform(img_A)
         img_B = img_transform(img_B)

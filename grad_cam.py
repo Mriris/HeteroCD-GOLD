@@ -89,7 +89,7 @@ def main():
             imgname = img_pathA.split('.')[0].split('/')[-1]
         imageA = np.asarray(Image.open(img_pathA).convert('RGB'))
         imageB = np.asarray(Image.open(img_pathB).convert('RGB'))
-        transform_list = [transforms.ToTensor(),transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        transform_list = [transforms.ToTensor(),transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))]
         img_transform = transforms.Compose(transform_list)
         img1 = img_transform(imageA)
         img2 = img_transform(imageB)

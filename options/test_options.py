@@ -43,7 +43,7 @@ class TestOptions:
         # 与训练一致的核心参数（用于蒸馏/权重等）
         parser.add_argument('--use_distill', action='store_true', default=True, help='是否使用蒸馏学习')
         parser.add_argument('--distill_temp', type=float, default=2.0, help='蒸馏学习的温度参数（统一默认2.0）')
-        parser.add_argument('--kl_div_reduction', type=str, default='batchmean', help='KL散度损失的缩减方式 [batchmean | mean | sum | none]')
+        parser.add_argument('--kl_div_reduction', type=str, default='mean', help='KL散度损失的缩减方式 [batchmean | mean | sum | none]')
 
         # 差异图注意力原子项的初始值（用于生成/评估一致性）
         parser.add_argument('--diff_att_alpha', type=float, default=0.5, help='差异图注意力损失中差异图权重(初始)')

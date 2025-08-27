@@ -10,9 +10,9 @@ class TrainOptions:
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split13',
+        parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split20',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='gold3',
+        parser.add_argument('--name', type=str, default='gold7',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -23,8 +23,8 @@ class TrainOptions:
                             help='normal、xavier和orthogonal的缩放因子。')
         parser.add_argument('--use_amp', action='store_true', default=False, 
                             help='是否使用混合精度训练（需要PyTorch>=1.6），可以加速训练，但可能会降低稳定性')
-        parser.add_argument('--gradient_clip_norm', type=float, default=1.0,
-                            help='梯度裁剪的最大范数值，用于避免梯度爆炸')
+        parser.add_argument('--gradient_clip_norm', type=float, default=0.5,
+                            help='梯度裁剪的最大范数值，用于避免梯度爆炸（调整为0.5增强稳定性）')
         # 附加参数
         parser.add_argument('--epoch', type=str, default='latest',
                             help='加载哪个epoch？设置为latest使用最新的缓存模型')
@@ -68,7 +68,7 @@ class TrainOptions:
         parser.add_argument('--weight_warmup_epochs', type=int, default=20, help='权重热身阶段的轮次数')
         # 任务级初始权重（缩放到1量级，避免总损失量级过大）
         parser.add_argument('--init_cd_weight', type=float, default=1.0, help='变化检测损失的初始权重')
-        parser.add_argument('--init_distill_weight', type=float, default=0.03, help='蒸馏损失的初始权重（下调以防早期主导）')
+        parser.add_argument('--init_distill_weight', type=float, default=0.3, help='蒸馏损失的初始权重（下调以防早期主导）')
         parser.add_argument('--init_diff_att_weight', type=float, default=0.2, help='差异图注意力损失的初始权重')
         # LCD 内部初始权重（保持学生:教师=5:1，但缩小到1量级）
         parser.add_argument('--init_student_cd_weight', type=float, default=1.0, help='LCD内部学生监督初始权重')
@@ -85,9 +85,9 @@ class TrainOptions:
         parser.add_argument('--ce_in_lcd_weight', type=float, default=1.0, help='LCD内部CE损失系数')
         parser.add_argument('--dice_in_lcd_weight', type=float, default=1.5, help='LCD内部Dice损失系数')
 
-        # CE 类权重与蒸馏特征掩码权重（适度收敛）
-        parser.add_argument('--ce_weight_bg', type=float, default=0.1, help='CE背景类权重')
-        parser.add_argument('--ce_weight_fg', type=float, default=0.9, help='CE前景类权重')
+        # CE 类权重与蒸馏特征掩码权重（重新平衡以改善精准率）
+        parser.add_argument('--ce_weight_bg', type=float, default=0.3, help='CE背景类权重')
+        parser.add_argument('--ce_weight_fg', type=float, default=0.7, help='CE前景类权重')
         parser.add_argument('--feature_mask_pos_weight', type=float, default=4.0, help='蒸馏特征掩码正样本权重')
         parser.add_argument('--feature_mask_neg_weight', type=float, default=0.5, help='蒸馏特征掩码负样本权重')
         parser.add_argument('--teacher_entropy_weight', type=float, default=0.0, help='教师熵正则权重(默认关闭)')

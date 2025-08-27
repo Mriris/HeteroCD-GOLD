@@ -764,9 +764,9 @@ class DualEUNet(nn.Module):
         """
         super(DualEUNet, self).__init__()
         # 光学图像编码器
-        self.encoder_opt = resnet18()
+        self.encoder_opt = resnet18(pretrained=True)
         # SAR图像编码器 
-        self.encoder_sar = resnet18()
+        self.encoder_sar = resnet18(pretrained=True)
         # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
         
@@ -913,11 +913,11 @@ class TripleEUNet(nn.Module):
         """
         super(TripleEUNet, self).__init__()
         # 光学图像编码器1 - 时间点1
-        self.encoder_opt1 = resnet18()
+        self.encoder_opt1 = resnet18(pretrained=True)
         # SAR图像编码器 - 时间点2 (学生网络)
-        self.encoder_sar = resnet18()
+        self.encoder_sar = resnet18(pretrained=True)
         # 光学图像编码器2 - 时间点2 (教师网络)
-        self.encoder_opt2 = resnet18()
+        self.encoder_opt2 = resnet18(pretrained=True)
         # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
         

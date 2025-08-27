@@ -724,8 +724,11 @@ class DifferenceAttentionLoss(nn.Module):
         # 组合两种差异图 - 直接在GPU上操作
         diff_map = (l2_diff + cos_diff) / 2.0
         
-        # 使用tanh函数增强对比度
-        diff_map = torch.tanh(diff_map * 2.0) * 0.5 + 0.5
+        # 使用更温和的normalization替代压缩性的tanh变换
+        # 避免将差异值过度压缩到0.5附近，保持区分度
+        diff_map_max = torch.max(diff_map.view(diff_map.shape[0], -1), dim=1, keepdim=True)[0]
+        diff_map_max = diff_map_max.unsqueeze(-1).unsqueeze(-1)
+        diff_map = diff_map / (diff_map_max + 1e-6)  # 归一化到[0,1]
         
         return diff_map
 
@@ -815,9 +818,6 @@ class HeterogeneousAttentionDistillationLoss(nn.Module):
         
         # 梯度计算更稳定的MSE损失
         self.mse_loss = nn.MSELoss(reduction='mean')
-        
-        # 添加Cosine相似度损失，更好地保持特征语义
-        self.cos_loss = nn.CosineEmbeddingLoss(reduction='mean')
 
     def forward(self, student_features, teacher_features, student_outputs, teacher_outputs,
                 opt_t1, opt_t2, sar_t2, feature_mask=None):
@@ -849,17 +849,12 @@ class HeterogeneousAttentionDistillationLoss(nn.Module):
         else:
             feature_loss_mse = self.mse_loss(student_features, teacher_features)
             
-        B, C, H, W = student_features.shape
-        student_features_flat = student_features.view(B, C, -1)
-        teacher_features_flat = teacher_features.view(B, C, -1)
-        cosine_target = torch.ones(B, H * W).to(student_features.device)
-        student_features_t = student_features_flat.transpose(1, 2)
-        teacher_features_t = teacher_features_flat.transpose(1, 2)
-        feature_loss_cos = self.cos_loss(
-            student_features_t.reshape(-1, C),
-            teacher_features_t.reshape(-1, C),
-            cosine_target.reshape(-1)
-        )
+        # 简化的Cosine损失计算：使用全局平均池化
+        student_global = F.adaptive_avg_pool2d(student_features, 1).squeeze()  # [B, C]
+        teacher_global = F.adaptive_avg_pool2d(teacher_features, 1).squeeze()  # [B, C]
+        
+        # 计算余弦相似度损失
+        feature_loss_cos = 1 - F.cosine_similarity(student_global, teacher_global, dim=1).mean()
         feature_loss = feature_loss_mse * 0.7 + feature_loss_cos * 0.3
             
         # 2. 输出蒸馏损失（KL散度）
