@@ -17,8 +17,10 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import rasterio
-from rasterio.warp import reproject, Resampling
+from rasterio.warp import reproject, Resampling, transform_bounds, transform as warp_transform
+from rasterio.transform import Affine
 from dataclasses import dataclass
+import math
 
 # 默认参数
 DEFAULT_INPUT_DIR = r"C:\1DataSets\241120\Compare\Datas\Final"
@@ -35,10 +37,11 @@ class ImageMetadata:
     base_name: str
     files: Dict[str, str]  # 类型 -> 文件路径
     bounds: Tuple[float, float, float, float]  # 地理边界
-    crs: str  # 坐标系
+    crs: object  # 坐标系 (rasterio.crs.CRS)
     size: Tuple[int, int]  # 像素尺寸
     transform: object  # 地理变换矩阵
     resolution: float  # 分辨率
+    bounds_in_target: Optional[Tuple[float, float, float, float]] = None  # 转到目标CRS后的边界
 
 
 @dataclass
@@ -104,7 +107,7 @@ class MetadataProcessor:
                 # 读取主要TIF文件的元数据
                 with rasterio.open(files['A']) as src:
                     bounds = src.bounds
-                    crs = str(src.crs)
+                    crs = src.crs
                     size = (src.width, src.height)
                     transform = src.transform
                     resolution = abs(transform.a)  # x方向分辨率
@@ -139,21 +142,37 @@ class MetadataProcessor:
         resolutions = []
         
         for metadata in self.images_metadata:
-            crs_counts[metadata.crs] = crs_counts.get(metadata.crs, 0) + 1
+            crs_key = str(metadata.crs)
+            crs_counts[crs_key] = crs_counts.get(crs_key, 0) + 1
             resolutions.append(metadata.resolution)
         
         # 选择最常见的坐标系和中位数分辨率
-        self.target_crs = max(crs_counts.items(), key=lambda x: x[1])[0]
+        from rasterio.crs import CRS
+        target_crs_str = max(crs_counts.items(), key=lambda x: x[1])[0]
+        self.target_crs = CRS.from_string(target_crs_str)
         self.target_resolution = np.median(resolutions)
         
         print(f"目标坐标系: {self.target_crs}")
         print(f"目标分辨率: {self.target_resolution}")
         
-        # 计算全局边界
-        min_x = min(m.bounds[0] for m in self.images_metadata)
-        min_y = min(m.bounds[1] for m in self.images_metadata)
-        max_x = max(m.bounds[2] for m in self.images_metadata)
-        max_y = max(m.bounds[3] for m in self.images_metadata)
+        # 将所有图像边界转换到目标坐标系并计算全局边界
+        bounds_in_target_list = []
+        for m in self.images_metadata:
+            try:
+                bx1, by1, bx2, by2 = m.bounds
+                tb = transform_bounds(m.crs, self.target_crs, bx1, by1, bx2, by2, densify_pts=21)
+                m.bounds_in_target = tb
+                bounds_in_target_list.append(tb)
+            except Exception as e:
+                print(f"警告: 转换边界到目标CRS失败: {e}")
+                # 回退：使用原边界（可能导致误差）
+                m.bounds_in_target = m.bounds
+                bounds_in_target_list.append(m.bounds)
+        
+        min_x = min(b[0] for b in bounds_in_target_list)
+        min_y = min(b[1] for b in bounds_in_target_list)
+        max_x = max(b[2] for b in bounds_in_target_list)
+        max_y = max(b[3] for b in bounds_in_target_list)
         
         self.global_bounds = (min_x, min_y, max_x, max_y)
         
@@ -169,6 +188,75 @@ class MetadataProcessor:
         
         print(f"全局边界: {self.global_bounds}")
         print(f"全局尺寸: {width} x {height}")
+    
+    def compute_src_dst_windows(self, 
+                                tile_meta: 'TileMetadata', 
+                                img_meta: 'ImageMetadata') -> Optional[Tuple[Tuple[int, int, int, int], Tuple[int, int, int, int]]]:
+        """计算给定切片与源图像之间的源窗口与目标窗口。
+        返回 (src_x1, src_y1, src_x2, src_y2), (dst_x1, dst_y1, dst_x2, dst_y2)
+        若无交集则返回 None。
+        """
+        # 切片地理边界（目标CRS）
+        tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_meta.global_bounds
+        # 源图像在目标CRS下的边界
+        if img_meta.bounds_in_target is not None:
+            img_min_x, img_min_y, img_max_x, img_max_y = img_meta.bounds_in_target
+        else:
+            img_min_x, img_min_y, img_max_x, img_max_y = img_meta.bounds
+        
+        # 计算地理交集（目标CRS）
+        ix_min_x = max(tile_min_x, img_min_x)
+        ix_max_x = min(tile_max_x, img_max_x)
+        ix_min_y = max(tile_min_y, img_min_y)
+        ix_max_y = min(tile_max_y, img_max_y)
+        
+        if ix_min_x >= ix_max_x or ix_min_y >= ix_max_y:
+            return None
+        
+        # 将交集四角从目标CRS转换到源图像CRS
+        xs_t = [ix_min_x, ix_max_x, ix_min_x, ix_max_x]
+        ys_t = [ix_max_y, ix_max_y, ix_min_y, ix_min_y]
+        try:
+            xs_s, ys_s = warp_transform(self.target_crs, img_meta.crs, xs_t, ys_t)
+        except Exception as _:
+            # 回退：若转换失败，直接使用目标CRS坐标（仅当CRS一致时才正确）
+            xs_s, ys_s = xs_t, ys_t
+        
+        # 计算源CRS下的包围盒
+        sx_min, sx_max = min(xs_s), max(xs_s)
+        sy_min, sy_max = min(ys_s), max(ys_s)
+        
+        # 使用 from_bounds 计算像素窗口
+        src_window = rasterio.windows.from_bounds(
+            left=sx_min, bottom=sy_min, right=sx_max, top=sy_max, transform=img_meta.transform
+        )
+        src_col_off = math.floor(src_window.col_off)
+        src_row_off = math.floor(src_window.row_off)
+        src_width = math.ceil(src_window.width)
+        src_height = math.ceil(src_window.height)
+        src_x1, src_y1 = src_col_off, src_row_off
+        src_x2, src_y2 = src_col_off + src_width, src_row_off + src_height
+        
+        # 边界裁剪
+        src_x1 = max(0, min(img_meta.size[0], src_x1))
+        src_y1 = max(0, min(img_meta.size[1], src_y1))
+        src_x2 = max(0, min(img_meta.size[0], src_x2))
+        src_y2 = max(0, min(img_meta.size[1], src_y2))
+        
+        if src_x2 <= src_x1 or src_y2 <= src_y1:
+            return None
+        
+        # 计算目标窗口（切片内像素坐标，目标CRS）
+        # 切片左上角地理坐标为 (tile_min_x, tile_max_y)
+        dst_x1 = int(max(0, math.floor((ix_min_x - tile_min_x) / self.target_resolution)))
+        dst_y1 = int(max(0, math.floor((tile_max_y - ix_max_y) / self.target_resolution)))
+        dst_x2 = int(min(self.tile_size, math.ceil((ix_max_x - tile_min_x) / self.target_resolution)))
+        dst_y2 = int(min(self.tile_size, math.ceil((tile_max_y - ix_min_y) / self.target_resolution)))
+        
+        if dst_x2 <= dst_x1 or dst_y2 <= dst_y1:
+            return None
+        
+        return (src_x1, src_y1, src_x2, src_y2), (dst_x1, dst_y1, dst_x2, dst_y2)
     
     def generate_tile_metadata(self) -> List[TileMetadata]:
         """生成所有切片的元数据"""
@@ -205,20 +293,13 @@ class MetadataProcessor:
                 source_mappings = []
                 for img_meta in self.images_metadata:
                     # 检查地理边界是否相交
-                    if (img_meta.bounds[2] > tile_min_x and img_meta.bounds[0] < tile_max_x and
-                        img_meta.bounds[3] > tile_min_y and img_meta.bounds[1] < tile_max_y):
+                    ib = img_meta.bounds_in_target if img_meta.bounds_in_target is not None else img_meta.bounds
+                    if (ib[2] > tile_min_x and ib[0] < tile_max_x and
+                        ib[3] > tile_min_y and ib[1] < tile_max_y):
                         
                         # 计算在源图像中的像素区域
-                        img_transform = img_meta.transform
-                        
-                        # 将地理坐标转换为源图像的像素坐标
-                        src_x1 = max(0, int((tile_min_x - img_meta.bounds[0]) / abs(img_transform.a)))
-                        src_y1 = max(0, int((img_meta.bounds[3] - tile_max_y) / abs(img_transform.e)))
-                        src_x2 = min(img_meta.size[0], int((tile_max_x - img_meta.bounds[0]) / abs(img_transform.a)))
-                        src_y2 = min(img_meta.size[1], int((img_meta.bounds[3] - tile_min_y) / abs(img_transform.e)))
-                        
-                        if src_x1 < src_x2 and src_y1 < src_y2:
-                            source_mappings.append((img_meta.base_name, (src_x1, src_y1, src_x2, src_y2)))
+                        # 不在此处计算具体像素窗口，延后到 compute_src_dst_windows 中统一按CRS转换
+                        source_mappings.append((img_meta.base_name, (0, 0, 0, 0)))
                 
                 # 只保留有源图像映射的切片
                 if source_mappings:
@@ -244,30 +325,54 @@ class MetadataProcessor:
                 label_tile = np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
                 
                 # 合并所有源图像的标签
-                for base_name, src_bounds in tile_meta.source_mappings:
+                for base_name, _ in tile_meta.source_mappings:
                     # 找到对应的图像元数据
                     img_meta = next(m for m in self.images_metadata if m.base_name == base_name)
                     
-                    # 读取标签文件
+                    # 计算源/目标窗口
+                    windows = self.compute_src_dst_windows(tile_meta, img_meta)
+                    if windows is None:
+                        continue
+                    (src_x1, src_y1, src_x2, src_y2), (dst_x1, dst_y1, dst_x2, dst_y2) = windows
+                    
+                    # 读取标签文件并按地理坐标重采样到目标窗口
                     label_path = img_meta.files['label']
                     with Image.open(label_path).convert('L') as img:
                         img_array = np.array(img)
-                    
-                    # 裁剪源区域
-                    src_x1, src_y1, src_x2, src_y2 = src_bounds
-                    src_region = img_array[src_y1:src_y2, src_x1:src_x2]
-                    
-                    if src_region.size == 0:
+                    if img_array.size == 0:
                         continue
                     
-                    # 计算在目标tile中的位置
-                    # 这里简化处理，假设完全对应
-                    dst_h, dst_w = src_region.shape
-                    if dst_h <= self.tile_size and dst_w <= self.tile_size:
-                        # 使用最大值合并策略
-                        label_tile[:dst_h, :dst_w] = np.maximum(
-                            label_tile[:dst_h, :dst_w], src_region
-                        )
+                    # 源窗口与其仿射
+                    from rasterio.windows import Window, transform as win_transform
+                    window = Window(src_x1, src_y1, src_x2 - src_x1, src_y2 - src_y1)
+                    src_transform_win = win_transform(window, img_meta.transform)
+                    src_region = img_array[src_y1:src_y2, src_x1:src_x2]
+                    
+                    # 目标窗口大小与仿射（对齐到 tile 网格中子窗口位置）
+                    dst_h = dst_y2 - dst_y1
+                    dst_w = dst_x2 - dst_x1
+                    if dst_h <= 0 or dst_w <= 0 or src_region.size == 0:
+                        continue
+                    tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_meta.global_bounds
+                    tile_transform = Affine(self.target_resolution, 0, tile_min_x, 0, -self.target_resolution, tile_max_y)
+                    dst_transform_win = tile_transform * Affine.translation(dst_x1, dst_y1)
+                    
+                    # 执行重投影（最近邻）
+                    dst_region = np.zeros((dst_h, dst_w), dtype=np.uint8)
+                    reproject(
+                        source=src_region,
+                        destination=dst_region,
+                        src_transform=src_transform_win,
+                        src_crs=img_meta.crs,
+                        dst_transform=dst_transform_win,
+                        dst_crs=self.target_crs,
+                        resampling=Resampling.nearest
+                    )
+                    
+                    # 合并到标签tile（最大值并集）
+                    label_tile[dst_y1:dst_y2, dst_x1:dst_x2] = np.maximum(
+                        label_tile[dst_y1:dst_y2, dst_x1:dst_x2], dst_region
+                    )
                 
                 # 计算前景比例
                 total_pixels = label_tile.size
@@ -297,30 +402,53 @@ class DatasetSplitter:
             # 创建A通道的合并tile用于黑块检测
             a_tile = np.zeros((processor.tile_size, processor.tile_size, 3), dtype=np.uint8)
             
-            for base_name, src_bounds in tile_meta.source_mappings[:1]:  # 只检查第一个源
+            for base_name, _ in tile_meta.source_mappings:
                 img_meta = next(m for m in processor.images_metadata if m.base_name == base_name)
+                windows = processor.compute_src_dst_windows(tile_meta, img_meta)
+                if windows is None:
+                    continue
+                (src_x1, src_y1, src_x2, src_y2), (dst_x1, dst_y1, dst_x2, dst_y2) = windows
                 
-                # 读取A通道文件
                 with rasterio.open(img_meta.files['A']) as src:
-                    # 读取源区域
-                    src_x1, src_y1, src_x2, src_y2 = src_bounds
-                    window = rasterio.windows.Window(src_x1, src_y1, src_x2-src_x1, src_y2-src_y1)
-                    data = src.read(window=window)  # 读取所有波段
+                    from rasterio.windows import Window, transform as win_transform
+                    window = Window(src_x1, src_y1, src_x2 - src_x1, src_y2 - src_y1)
+                    src_transform_win = win_transform(window, img_meta.transform)
+                    src_region = src.read(window=window)  # (C, H, W)
+                    dst_h = dst_y2 - dst_y1
+                    dst_w = dst_x2 - dst_x1
+                    if src_region.size == 0 or dst_h <= 0 or dst_w <= 0:
+                        continue
+                    # 构造目标子窗口仿射变换
+                    tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_meta.global_bounds
+                    tile_transform = Affine(processor.target_resolution, 0, tile_min_x, 0, -processor.target_resolution, tile_max_y)
+                    dst_transform_win = tile_transform * Affine.translation(dst_x1, dst_y1)
                     
-                    # 转换为 (H, W, C) 格式
-                    if data.ndim == 3:
-                        data = np.transpose(data, (1, 2, 0))
+                    # 准备目标数组 (C, H, W)
+                    channels = src_region.shape[0]
+                    channels = min(3, channels)
+                    dst_region = np.zeros((channels, dst_h, dst_w), dtype=np.uint8)
                     
-                    # 调整大小以适应tile
-                    if data.shape[:2] != (processor.tile_size, processor.tile_size):
-                        img = Image.fromarray(data.astype(np.uint8))
-                        img = img.resize((processor.tile_size, processor.tile_size), Image.NEAREST)
-                        data = np.array(img)
+                    # 对每个通道重投影（双线性）
+                    for c in range(channels):
+                        reproject(
+                            source=src_region[c],
+                            destination=dst_region[c],
+                            src_transform=src_transform_win,
+                            src_crs=img_meta.crs,
+                            dst_transform=dst_transform_win,
+                            dst_crs=processor.target_crs,
+                            resampling=Resampling.bilinear
+                        )
                     
-                    # 使用最新策略合并
-                    valid_mask = np.any(data > 0, axis=-1)
-                    a_tile[valid_mask] = data[valid_mask]
-                    break  # 只检查第一个有效源
+                    # (C,H,W) -> (H,W,C)
+                    data_hw3 = np.transpose(dst_region, (1, 2, 0))
+                    if data_hw3.shape[-1] == 1:
+                        data_hw3 = np.repeat(data_hw3, 3, axis=-1)
+                    
+                    valid_mask = np.any(data_hw3 > 0, axis=-1)
+                    a_tile_region = a_tile[dst_y1:dst_y2, dst_x1:dst_x2]
+                    a_tile_region[valid_mask] = data_hw3[valid_mask]
+                    a_tile[dst_y1:dst_y2, dst_x1:dst_x2] = a_tile_region
             
             # 检查是否为黑块
             black_pixels = np.sum(np.all(a_tile <= 5, axis=-1))
@@ -570,14 +698,21 @@ class TileGenerator:
                 tile_data[img_type] = np.zeros((self.processor.tile_size, self.processor.tile_size, 3), dtype=np.uint8)
         
         # 合并所有源图像
-        for base_name, src_bounds in tile_meta.source_mappings:
+        for base_name, _ in tile_meta.source_mappings:
             img_meta = next(m for m in self.processor.images_metadata if m.base_name == base_name)
-            src_x1, src_y1, src_x2, src_y2 = src_bounds
+            windows = self.processor.compute_src_dst_windows(tile_meta, img_meta)
+            if windows is None:
+                continue
+            (src_x1, src_y1, src_x2, src_y2), (dst_x1, dst_y1, dst_x2, dst_y2) = windows
             
             # 处理每种图像类型
             for img_type in ['A', 'B', 'D', 'label']:
                 try:
                     file_path = img_meta.files[img_type]
+                    dst_h = dst_y2 - dst_y1
+                    dst_w = dst_x2 - dst_x1
+                    if dst_h <= 0 or dst_w <= 0:
+                        continue
                     
                     if img_type == 'label':
                         # PNG标签文件
@@ -585,35 +720,51 @@ class TileGenerator:
                             img_array = np.array(img)
                         
                         src_region = img_array[src_y1:src_y2, src_x1:src_x2]
+                        if src_region.size == 0:
+                            continue
+                        if src_region.shape[:2] != (dst_h, dst_w):
+                            img_pil = Image.fromarray(src_region)
+                            img_pil = img_pil.resize((dst_w, dst_h), Image.NEAREST)
+                            src_region = np.array(img_pil)
                         
-                        if src_region.size > 0:
-                            # 调整大小
-                            if src_region.shape != (self.processor.tile_size, self.processor.tile_size):
-                                img_pil = Image.fromarray(src_region)
-                                img_pil = img_pil.resize((self.processor.tile_size, self.processor.tile_size), Image.NEAREST)
-                                src_region = np.array(img_pil)
-                            
-                            # 使用最大值合并
-                            tile_data[img_type] = np.maximum(tile_data[img_type], src_region)
+                        # 使用最大值合并（标签）
+                        dst_region = tile_data[img_type][dst_y1:dst_y2, dst_x1:dst_x2]
+                        tile_data[img_type][dst_y1:dst_y2, dst_x1:dst_x2] = np.maximum(dst_region, src_region)
                     else:
-                        # TIF文件
+                        # TIF文件：按地理坐标精准重采样到目标窗口
                         with rasterio.open(file_path) as src:
-                            window = rasterio.windows.Window(src_x1, src_y1, src_x2-src_x1, src_y2-src_y1)
-                            data = src.read(window=window)
+                            from rasterio.windows import Window, transform as win_transform
+                            window = Window(src_x1, src_y1, src_x2 - src_x1, src_y2 - src_y1)
+                            src_transform_win = win_transform(window, img_meta.transform)
+                            src_region = src.read(window=window)  # (C,H,W)
+                            if src_region.size == 0:
+                                continue
                             
-                            if data.ndim == 3:
-                                data = np.transpose(data, (1, 2, 0))
+                            # 目标子窗口仿射
+                            tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_meta.global_bounds
+                            tile_transform = Affine(self.processor.target_resolution, 0, tile_min_x, 0, -self.processor.target_resolution, tile_max_y)
+                            dst_transform_win = tile_transform * Affine.translation(dst_x1, dst_y1)
                             
-                            # 调整大小
-                            if data.shape[:2] != (self.processor.tile_size, self.processor.tile_size):
-                                img_pil = Image.fromarray(data.astype(np.uint8))
-                                img_pil = img_pil.resize((self.processor.tile_size, self.processor.tile_size), Image.NEAREST)
-                                data = np.array(img_pil)
+                            channels = min(3, src_region.shape[0])
+                            dst_region = np.zeros((channels, dst_h, dst_w), dtype=np.uint8)
+                            for c in range(channels):
+                                reproject(
+                                    source=src_region[c],
+                                    destination=dst_region[c],
+                                    src_transform=src_transform_win,
+                                    src_crs=img_meta.crs,
+                                    dst_transform=dst_transform_win,
+                                    dst_crs=self.processor.target_crs,
+                                    resampling=Resampling.bilinear
+                                )
+                            data_hw3 = np.transpose(dst_region, (1, 2, 0))
+                            if data_hw3.shape[-1] == 1:
+                                data_hw3 = np.repeat(data_hw3, 3, axis=-1)
                             
-                            # 使用latest策略
-                            valid_mask = np.any(data > 0, axis=-1)
-                            tile_data[img_type][valid_mask] = data[valid_mask]
-                
+                            valid_mask = np.any(data_hw3 > 0, axis=-1)
+                            dst_region_hw3 = tile_data[img_type][dst_y1:dst_y2, dst_x1:dst_x2]
+                            dst_region_hw3[valid_mask] = data_hw3[valid_mask]
+                            tile_data[img_type][dst_y1:dst_y2, dst_x1:dst_x2] = dst_region_hw3
                 except Exception as e:
                     print(f"警告: 处理 {base_name} 的 {img_type} 时出错: {e}")
                     continue

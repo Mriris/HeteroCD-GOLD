@@ -10,9 +10,9 @@ class TrainOptions:
 
     def initialize(self, parser):
         # 基本参数
-        parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split21',
+        parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split23',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='gold8',
+        parser.add_argument('--name', type=str, default='gold9',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='2',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')
@@ -86,8 +86,8 @@ class TrainOptions:
         parser.add_argument('--dice_in_lcd_weight', type=float, default=1.5, help='LCD内部Dice损失系数')
 
         # CE 类权重与蒸馏特征掩码权重（重新平衡以改善精准率）
-        parser.add_argument('--ce_weight_bg', type=float, default=0.3, help='CE背景类权重')
-        parser.add_argument('--ce_weight_fg', type=float, default=0.7, help='CE前景类权重')
+        parser.add_argument('--ce_weight_bg', type=float, default=0.1, help='CE背景类权重')
+        parser.add_argument('--ce_weight_fg', type=float, default=0.9, help='CE前景类权重')
         parser.add_argument('--feature_mask_pos_weight', type=float, default=4.0, help='蒸馏特征掩码正样本权重')
         parser.add_argument('--feature_mask_neg_weight', type=float, default=0.5, help='蒸馏特征掩码负样本权重')
         parser.add_argument('--teacher_entropy_weight', type=float, default=0.0, help='教师熵正则权重(默认关闭)')

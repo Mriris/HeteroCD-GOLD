@@ -493,14 +493,14 @@ if __name__ == '__main__':
                 cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
                 f.write(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}\n')
             
-            # 合并展示训练和验证结果
-            f.write('【学生网络】 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)\n' %
-                   (train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+            # 合并展示训练和验证结果 - 显示详细的IoU指标避免混淆
+            f.write('【学生网络】 - 训练平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f/%.4f, Loss: %.4f)\n' %
+                   (train_score['miou'], train_iou, train_loss, score['miou'], score['iou_1'], best_iou, val_loss.average()))
                    
             # 如果有教师网络，记录教师网络结果
             if teacher_score is not None and teacher_val_score is not None:
-                f.write('【教师网络】 - 训练IoU: %.4f | 验证IoU: %.4f (Loss: %.4f)\n' %
-                       (teacher_score['iou_1'], teacher_val_score['iou_1'], teacher_val_loss.average()))
+                f.write('【教师网络】 - 训练平均IoU: %.4f (变化IoU: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f)\n' %
+                       (teacher_score['miou'], teacher_score['iou_1'], teacher_val_score['miou'], teacher_val_score['iou_1'], teacher_val_loss.average()))
 
             # 分别记录详细指标
             f.write('学生网络训练详细指标: %s\n' % {k: round(v, 4) if isinstance(v, float) else v for k, v in train_score.items()})
@@ -519,14 +519,14 @@ if __name__ == '__main__':
             cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
             print(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}')
 
-        # 合并展示训练和验证结果
-        print('【Epoch: %d】学生网络 - 训练IoU: %.4f (Loss: %.4f) | 验证IoU: %.4f/%.4f (Loss: %.4f)' %
-             (epoch, train_iou, train_loss, score['iou_1'], best_iou, val_loss.average()))
+        # 合并展示训练和验证结果 - 显示详细的IoU指标避免混淆
+        print('【Epoch: %d】学生网络 - 训练平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f/%.4f, Loss: %.4f)' %
+             (epoch, train_score['miou'], train_iou, train_loss, score['miou'], score['iou_1'], best_iou, val_loss.average()))
              
         # 如果有教师网络，打印教师网络结果
         if teacher_score is not None and teacher_val_score is not None:
-            print('【Epoch: %d】教师网络 - 训练IoU: %.4f | 验证IoU: %.4f (Loss: %.4f)' %
-                 (epoch, teacher_score['iou_1'], teacher_val_score['iou_1'], teacher_val_loss.average()))
+            print('【Epoch: %d】教师网络 - 训练平均IoU: %.4f (变化IoU: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f)' %
+                 (epoch, teacher_score['miou'], teacher_score['iou_1'], teacher_val_score['miou'], teacher_val_score['iou_1'], teacher_val_loss.average()))
 
         # 对比展示关键指标 - 使用固定宽度确保对齐
         print('╔═════════╦════════════╦═══════════════╦═══════════════╦═══════════════╗')
