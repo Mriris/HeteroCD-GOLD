@@ -22,7 +22,7 @@ class TripleHeteCD(BaseModel):
         """
         BaseModel.__init__(self, opt, is_train=True)
 
-        # 是否使用三分支网络和蒸馏学习
+        # 是否使用双编码器网络和蒸馏学习
         self.use_distill = opt.use_distill
         # 是否使用轻量化模型
         self.use_lightweight = getattr(opt, 'use_lightweight', False)
@@ -91,7 +91,7 @@ class TripleHeteCD(BaseModel):
         # 定义网络
         if self.use_distill:
             if self.use_lightweight:
-                # 使用轻量化三分支网络
+                # 使用轻量化双编码器网络
                 print("使用轻量化模型")
                 self.netCD = LightweightTripleEUNet(
                     3, 2, 
@@ -99,7 +99,7 @@ class TripleHeteCD(BaseModel):
                     attention_reduction_ratio=getattr(opt, 'attention_reduction_ratio', 32)
                 )
             else:
-                # 使用标准三分支网络
+                # 使用标准双编码器网络
                 print("使用标准模型")
                 self.netCD = TripleEUNet(3, 2)
                 
@@ -244,7 +244,7 @@ class TripleHeteCD(BaseModel):
         self.is_train = False
         with torch.no_grad():
             if self.use_distill and self.opt_img2 is not None:
-                # 对于TripleEUNet，只获取学生网络的输出
+                # 对于双编码器网络，只获取学生网络的输出
                 self.change_pred = self.netCD(self.opt_img, self.sar_img, self.opt_img2, is_training=False)
             else:
                 self.forward_CD()
@@ -282,7 +282,7 @@ class TripleHeteCD(BaseModel):
     def forward_CD(self):
         """执行变化检测的前向传播"""
         if self.use_distill and self.opt_img2 is not None and self.is_train:
-            # 使用增强的三分支网络进行训练，返回值包括原始特征
+            # 使用双编码器网络进行训练，返回值包括原始特征
             # (学生输出, 教师输出, 学生增强特征, 教师增强特征, 学生中间特征, 教师中间特征, 光学t1特征, 光学t2特征, SAR t2特征)
             self.student_out, self.teacher_out, self.student_feat, self.teacher_feat, \
                 self.student_mid_feat, self.teacher_mid_feat, self.opt_t1_feat, \
@@ -291,7 +291,7 @@ class TripleHeteCD(BaseModel):
             )
             self.change_pred = self.student_out
         else:
-            # 使用双分支网络或者三分支网络的测试模式
+            # 使用双分支网络或者双编码器网络的测试模式
             self.change_pred = self.netCD(self.opt_img, self.sar_img)
         
         return self.change_pred

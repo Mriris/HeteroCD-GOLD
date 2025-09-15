@@ -905,26 +905,23 @@ class DualEUNet(nn.Module):
 
 class TripleEUNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=False):
-        """三分支EUNet网络，用于异源遥感图像变化检测
+        """双分支EUNet网络，用于异源遥感图像变化检测
         参数:
             n_channels (int): 输入通道数
             n_classes (int): 输出类别数
             bilinear (bool): 是否使用双线性插值上采样
         """
         super(TripleEUNet, self).__init__()
-        # 光学图像编码器1 - 时间点1
-        self.encoder_opt1 = resnet18(pretrained=True)
-        # SAR图像编码器 - 时间点2 (学生网络)
+        # 光学图像编码器 - 用于时间点1和时间点2的光学图像（共享权重）
+        self.encoder_opt = resnet18(pretrained=True)
+        # SAR图像编码器 - 时间点2
         self.encoder_sar = resnet18(pretrained=True)
-        # 光学图像编码器2 - 时间点2 (教师网络)
-        self.encoder_opt2 = resnet18(pretrained=True)
         # Dropout层
         self.dropout = nn.Dropout2d(p=0.1, inplace=False)
         
         # 特征融合相关参数和层
-        self.convs1 = nn.ModuleList()
-        self.convs2 = nn.ModuleList()
-        self.convs3 = nn.ModuleList()
+        self.convs1 = nn.ModuleList()  # 光学图像特征变换（时间点1和时间点2共享）
+        self.convs2 = nn.ModuleList()  # SAR图像特征变换
         
         self.in_channels = [64, 128, 256, 512]
         self.channels = 128
@@ -935,10 +932,6 @@ class TripleEUNet(nn.Module):
             nn.BatchNorm2d(self.channels),
         )
         self.fusion_conv2 = nn.Sequential(
-            nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
-            nn.BatchNorm2d(self.channels),
-        )
-        self.fusion_conv3 = nn.Sequential(
             nn.Conv2d(self.channels * len(self.in_channels), self.channels, kernel_size=1),
             nn.BatchNorm2d(self.channels),
         )
@@ -956,13 +949,6 @@ class TripleEUNet(nn.Module):
                 )
             )
             self.convs2.append(
-                nn.Sequential(
-                    nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
-                    nn.BatchNorm2d(self.channels),
-                    nn.ReLU()
-                )
-            )
-            self.convs3.append(
                 nn.Sequential(
                     nn.Conv2d(self.in_channels[i], self.channels, kernel_size=1),
                     nn.BatchNorm2d(self.channels),
@@ -1113,6 +1099,7 @@ class TripleEUNet(nn.Module):
         
     def base_forward3(self, inputs):
         """光学图像特征前向传播 - 分支3 (教师网络)
+        现在与分支1共享特征变换层，因为使用同一个光学编码器
         参数:
             inputs (list): 多尺度特征列表
         """
@@ -1122,7 +1109,8 @@ class TripleEUNet(nn.Module):
         # 预先分配空间来存储处理后的特征
         for idx in range(len(inputs)):
             x = inputs[idx]
-            conv = self.convs3[idx]
+            # 使用与光学图像分支1相同的特征变换层
+            conv = self.convs1[idx]  
             # 统一处理分辨率，减少重复的形状比较检查
             if x.shape[2:] != input_shape:
                 x_resized = resize(
@@ -1135,7 +1123,8 @@ class TripleEUNet(nn.Module):
                 outs.append(conv(x))
                 
         # 一次性拼接所有特征，减少多次拼接操作
-        out = self.fusion_conv3(torch.cat(outs, dim=1))
+        # 使用与光学图像分支1相同的融合卷积层
+        out = self.fusion_conv1(torch.cat(outs, dim=1))
         return out, outs
 
     def cls_seg(self, feat):
@@ -1173,9 +1162,9 @@ class TripleEUNet(nn.Module):
             否则:
                 tensor: 学生网络输出
         """
-        # 编码器特征提取
-        x_opt1 = self.encoder_opt1(x1)  # 分支1: 时间点1的光学图像
-        x_sar = self.encoder_sar(x2)    # 分支2: 时间点2的SAR图像 (学生网络)
+        # 编码器特征提取 - 现在使用两个编码器
+        x_opt1 = self.encoder_opt(x1)   # 分支1: 时间点1的光学图像（共享编码器）
+        x_sar = self.encoder_sar(x2)    # 分支2: 时间点2的SAR图像 
         
         # 特征融合 - 学生网络 (光学-SAR)
         out1 = self.base_forward1(x_opt1[1:])  # 光学特征
@@ -1202,8 +1191,8 @@ class TripleEUNet(nn.Module):
             return student_out
             
         # 训练模式且提供了x3
-        # 分支3: 时间点2的光学图像 (教师网络)
-        x_opt2 = self.encoder_opt2(x3)
+        # 分支3: 时间点2的光学图像 (教师网络) - 使用共享的光学编码器
+        x_opt2 = self.encoder_opt(x3)
         
         # 特征融合 - 教师网络 (光学-光学)
         out3, teacher_features = self.base_forward3(x_opt2[1:])
@@ -1255,12 +1244,10 @@ class LightweightTripleEUNet(nn.Module):
         base_channels = int(64 * channel_scale)  # 基础通道数从64降至32
         
         # 使用轻量化ResNet18作为编码器，使用随机初始化的权重
-        # 光学图像分支1的编码器
-        self.base_encoder1 = lightweight_resnet18(channel_reduction=channel_reduction)
-        # 多模态图像分支2的编码器
-        self.base_encoder2 = lightweight_resnet18(channel_reduction=channel_reduction)
-        # 光学图像分支3的编码器 (教师网络)
-        self.base_encoder3 = lightweight_resnet18(channel_reduction=channel_reduction)
+        # 光学图像编码器（时间点1和时间点2共享权重）
+        self.base_encoder_opt = lightweight_resnet18(channel_reduction=channel_reduction)
+        # SAR图像编码器
+        self.base_encoder_sar = lightweight_resnet18(channel_reduction=channel_reduction)
         
         # 轻量化版本的双向通道注意力模块
         self.channel_att = BidirectionalChannelAttention(
@@ -1317,108 +1304,73 @@ class LightweightTripleEUNet(nn.Module):
         )
         return channel_att_layers
 
-    def base_forward1(self, inputs):
-        """光学图像分支1的前向传播 - 轻量化版本"""
-        x = self.base_encoder1.conv1(inputs)
-        x = self.base_encoder1.bn1(x)
+    def base_forward_opt(self, inputs):
+        """光学图像的前向传播 - 轻量化版本（时间点1和时间点2共享）"""
+        x = self.base_encoder_opt.conv1(inputs)
+        x = self.base_encoder_opt.bn1(x)
         # 使用正确的relu属性名称
-        if hasattr(self.base_encoder1, 'relu1'):  # 轻量版ResNet使用relu1
-            x = self.base_encoder1.relu1(x)
+        if hasattr(self.base_encoder_opt, 'relu1'):  # 轻量版ResNet使用relu1
+            x = self.base_encoder_opt.relu1(x)
         else:  # 标准ResNet使用relu
-            x = self.base_encoder1.relu(x)
+            x = self.base_encoder_opt.relu(x)
         
-        if hasattr(self.base_encoder1, 'conv2'):
-            x = self.base_encoder1.conv2(x)
-            x = self.base_encoder1.bn2(x)
-            if hasattr(self.base_encoder1, 'relu2'):
-                x = self.base_encoder1.relu2(x)
+        if hasattr(self.base_encoder_opt, 'conv2'):
+            x = self.base_encoder_opt.conv2(x)
+            x = self.base_encoder_opt.bn2(x)
+            if hasattr(self.base_encoder_opt, 'relu2'):
+                x = self.base_encoder_opt.relu2(x)
             else:
-                x = self.base_encoder1.relu(x)
+                x = self.base_encoder_opt.relu(x)
                 
-        if hasattr(self.base_encoder1, 'conv3'):
-            x = self.base_encoder1.conv3(x)
-            x = self.base_encoder1.bn3(x)
-            if hasattr(self.base_encoder1, 'relu3'):
-                x = self.base_encoder1.relu3(x)
+        if hasattr(self.base_encoder_opt, 'conv3'):
+            x = self.base_encoder_opt.conv3(x)
+            x = self.base_encoder_opt.bn3(x)
+            if hasattr(self.base_encoder_opt, 'relu3'):
+                x = self.base_encoder_opt.relu3(x)
             else:
-                x = self.base_encoder1.relu(x)
-        x = self.base_encoder1.maxpool(x)
+                x = self.base_encoder_opt.relu(x)
+        x = self.base_encoder_opt.maxpool(x)
 
         # 只提取关键层特征，减少计算量
-        c1 = self.base_encoder1.layer1(x)
-        c2 = self.base_encoder1.layer2(c1)
-        c3 = self.base_encoder1.layer3(c2)
-        c4 = self.base_encoder1.layer4(c3)
+        c1 = self.base_encoder_opt.layer1(x)
+        c2 = self.base_encoder_opt.layer2(c1)
+        c3 = self.base_encoder_opt.layer3(c2)
+        c4 = self.base_encoder_opt.layer4(c3)
 
         return [c1, c2, c3, c4]
 
-    def base_forward2(self, inputs):
-        """SAR图像分支2的前向传播 - 轻量化版本"""
-        x = self.base_encoder2.conv1(inputs)
-        x = self.base_encoder2.bn1(x)
+    def base_forward_sar(self, inputs):
+        """SAR图像的前向传播 - 轻量化版本"""
+        x = self.base_encoder_sar.conv1(inputs)
+        x = self.base_encoder_sar.bn1(x)
         # 使用正确的relu属性名称
-        if hasattr(self.base_encoder2, 'relu1'):  # 轻量版ResNet使用relu1
-            x = self.base_encoder2.relu1(x)
+        if hasattr(self.base_encoder_sar, 'relu1'):  # 轻量版ResNet使用relu1
+            x = self.base_encoder_sar.relu1(x)
         else:  # 标准ResNet使用relu
-            x = self.base_encoder2.relu(x)
+            x = self.base_encoder_sar.relu(x)
         
-        if hasattr(self.base_encoder2, 'conv2'):
-            x = self.base_encoder2.conv2(x)
-            x = self.base_encoder2.bn2(x)
-            if hasattr(self.base_encoder2, 'relu2'):
-                x = self.base_encoder2.relu2(x)
+        if hasattr(self.base_encoder_sar, 'conv2'):
+            x = self.base_encoder_sar.conv2(x)
+            x = self.base_encoder_sar.bn2(x)
+            if hasattr(self.base_encoder_sar, 'relu2'):
+                x = self.base_encoder_sar.relu2(x)
             else:
-                x = self.base_encoder2.relu(x)
+                x = self.base_encoder_sar.relu(x)
                 
-        if hasattr(self.base_encoder2, 'conv3'):
-            x = self.base_encoder2.conv3(x)
-            x = self.base_encoder2.bn3(x)
-            if hasattr(self.base_encoder2, 'relu3'):
-                x = self.base_encoder2.relu3(x)
+        if hasattr(self.base_encoder_sar, 'conv3'):
+            x = self.base_encoder_sar.conv3(x)
+            x = self.base_encoder_sar.bn3(x)
+            if hasattr(self.base_encoder_sar, 'relu3'):
+                x = self.base_encoder_sar.relu3(x)
             else:
-                x = self.base_encoder2.relu(x)
-        x = self.base_encoder2.maxpool(x)
+                x = self.base_encoder_sar.relu(x)
+        x = self.base_encoder_sar.maxpool(x)
 
         # 只提取关键层特征，减少计算量
-        c1 = self.base_encoder2.layer1(x)
-        c2 = self.base_encoder2.layer2(c1)
-        c3 = self.base_encoder2.layer3(c2)
-        c4 = self.base_encoder2.layer4(c3)
-
-        return [c1, c2, c3, c4]
-
-    def base_forward3(self, inputs):
-        """光学图像分支3（教师）的前向传播 - 轻量化版本"""
-        x = self.base_encoder3.conv1(inputs)
-        x = self.base_encoder3.bn1(x)
-        # 使用正确的relu属性名称
-        if hasattr(self.base_encoder3, 'relu1'):  # 轻量版ResNet使用relu1
-            x = self.base_encoder3.relu1(x)
-        else:  # 标准ResNet使用relu
-            x = self.base_encoder3.relu(x)
-        
-        if hasattr(self.base_encoder3, 'conv2'):
-            x = self.base_encoder3.conv2(x)
-            x = self.base_encoder3.bn2(x)
-            if hasattr(self.base_encoder3, 'relu2'):
-                x = self.base_encoder3.relu2(x)
-            else:
-                x = self.base_encoder3.relu(x)
-                
-        if hasattr(self.base_encoder3, 'conv3'):
-            x = self.base_encoder3.conv3(x)
-            x = self.base_encoder3.bn3(x)
-            if hasattr(self.base_encoder3, 'relu3'):
-                x = self.base_encoder3.relu3(x)
-            else:
-                x = self.base_encoder3.relu(x)
-        x = self.base_encoder3.maxpool(x)
-
-        # 只提取关键层特征，减少计算量
-        c1 = self.base_encoder3.layer1(x)
-        c2 = self.base_encoder3.layer2(c1)
-        c3 = self.base_encoder3.layer3(c2)
-        c4 = self.base_encoder3.layer4(c3)
+        c1 = self.base_encoder_sar.layer1(x)
+        c2 = self.base_encoder_sar.layer2(c1)
+        c3 = self.base_encoder_sar.layer3(c2)
+        c4 = self.base_encoder_sar.layer4(c3)
 
         return [c1, c2, c3, c4]
 
@@ -1437,20 +1389,20 @@ class LightweightTripleEUNet(nn.Module):
             return feat
 
     def forward(self, x1, x2, x3=None, is_training=True):
-        """模型前向传播
+        """模型前向传播 - 双编码器架构
         
         参数:
-            x1: 光学图像1
-            x2: SAR图像
-            x3: 光学图像2（教师网络输入），可选
+            x1: 光学图像1（时间点1）
+            x2: SAR图像（时间点2）
+            x3: 光学图像2（时间点2），用于教师网络，可选
             is_training: 是否处于训练模式
         
         返回:
             元组：返回9个值以匹配原始TripleEUNet的接口
         """
-        # 特征提取
-        c1 = self.base_forward1(x1)
-        c2 = self.base_forward2(x2)
+        # 特征提取 - 使用双编码器架构
+        c1 = self.base_forward_opt(x1)  # 时间点1光学图像特征
+        c2 = self.base_forward_sar(x2)  # 时间点2 SAR图像特征
         
         # 使用channel_att进行特征交互
         c1_interact, c2_interact = self.channel_att(c1[3], c2[3])
@@ -1472,12 +1424,12 @@ class LightweightTripleEUNet(nn.Module):
         
         # 训练时进行教师网络推理
         if is_training and x3 is not None:
-            # 教师网络特征提取
-            c3 = self.base_forward3(x3)
-            c4 = self.base_forward1(x1)
+            # 教师网络特征提取 - 使用共享的光学编码器
+            c3 = self.base_forward_opt(x3)  # 时间点2光学图像特征
+            # c4已经是c1，因为使用的是同一个编码器
             
             # 教师网络预测
-            teacher_outputs = self.teacher_decoder(c3, c4)
+            teacher_outputs = self.teacher_decoder(c3, c1)
             teacher_out = teacher_outputs[-1]  # 取最后一个输出
             teacher_pred = self.cls_seg_teacher(teacher_out)
             

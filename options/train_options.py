@@ -24,7 +24,7 @@ class TrainOptions:
         # 基本参数
         parser.add_argument('--dataroot', default=r'/data/jingwei/yantingxuan/Datasets/CityCN/Split24',
                             help='图像路径')
-        parser.add_argument('--name', type=str, default='single12',
+        parser.add_argument('--name', type=str, default='gold18',
                             help='实验名称。决定了在哪里存储样本和模型')
         parser.add_argument('--gpu_ids', type=str, default='0',
                             help='gpu的id：例如 0  0,1,2, 0,2。使用-1表示CPU')

@@ -850,10 +850,14 @@ class HeterogeneousAttentionDistillationLoss(nn.Module):
             feature_loss_mse = self.mse_loss(student_features, teacher_features)
             
         # 简化的Cosine损失计算：使用全局平均池化
-        student_global = F.adaptive_avg_pool2d(student_features, 1).squeeze()  # [B, C]
-        teacher_global = F.adaptive_avg_pool2d(teacher_features, 1).squeeze()  # [B, C]
+        student_global = F.adaptive_avg_pool2d(student_features, 1).flatten(1)  # [B, C]
+        teacher_global = F.adaptive_avg_pool2d(teacher_features, 1).flatten(1)  # [B, C]
         
-        # 计算余弦相似度损失
+        # 计算余弦相似度损失，处理维度问题
+        if student_global.dim() == 1:
+            student_global = student_global.unsqueeze(0)
+        if teacher_global.dim() == 1:
+            teacher_global = teacher_global.unsqueeze(0)
         feature_loss_cos = 1 - F.cosine_similarity(student_global, teacher_global, dim=1).mean()
         feature_loss = feature_loss_mse * 0.7 + feature_loss_cos * 0.3
             
