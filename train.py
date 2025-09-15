@@ -46,9 +46,10 @@ if __name__ == '__main__':
     val_set = dataset.Data('val', root=opt.dataroot, load_t2_opt=True)
     val_loader = DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle=False, drop_last=False)
     
-    # 创建模型，设置use_distill=True启用蒸馏学习
-    opt.use_distill = True  # 启用蒸馏学习
+    # 创建模型，使用命令行参数中的蒸馏学习设置
     print(f"使用{'轻量化' if opt.use_lightweight else '标准'}模型")
+    print(f"蒸馏学习: {'启用' if opt.use_distill else '禁用'}")
+    print(f"动态权重: {'启用' if opt.use_dynamic_weights else '禁用'}")
     model = TripleHeteCD(opt, is_train=True)
     
     # 添加断点续训功能：恢复之前的训练状态
@@ -274,7 +275,7 @@ if __name__ == '__main__':
                 losses = model.get_current_losses()
                 t_comp = (time.time() - iter_start_time) / opt.batch_size
                 # 汉化输出格式
-                loss_str = ' '.join([f'{name}: {value:.3f}' for name, value in losses.items()])
+                loss_str = ' '.join([f'{name}: {value:.6f}' for name, value in losses.items()])
                 visualizer.print_current_losses(epoch, epoch_iter, losses, t_comp, t_data)
                 print(f'(轮次: {epoch}, 批次: {i}, 用时: {t_comp:.3f}秒/样本, 数据加载: {t_data:.3f}秒) {loss_str}')
 
@@ -488,10 +489,15 @@ if __name__ == '__main__':
             f.write('='*100 + '\n【Epoch: %d】\n' % epoch)
             
             # 如果使用动态权重，记录当前权重值
-            if opt.use_dynamic_weights and hasattr(model, 'get_dynamic_weights'):
-                model.set_epoch(epoch)  # 确保模型知道当前epoch
-                cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
-                f.write(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}\n')
+            if opt.use_dynamic_weights:
+                # 直接从模型获取分组权重（任务级与 LA 内部）
+                model.set_epoch(epoch)
+                try:
+                    task_w, cd_w, distill_w, att_w = model.get_group_weights()
+                    f.write('【动态权重-任务级】LCD: %.4f, Distill: %.4f, Att: %.4f\n' % (task_w[0].item(), task_w[1].item(), task_w[2].item()))
+                    f.write('【动态权重-LA内部】DiffMap: %.4f, Channel: %.4f, Spatial: %.4f\n' % (att_w[0].item(), att_w[1].item(), att_w[2].item()))
+                except Exception as e:
+                    f.write(f'【动态权重】记录失败: {e}\n')
             
             # 合并展示训练和验证结果 - 显示详细的IoU指标避免混淆
             f.write('【学生网络】 - 训练平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f/%.4f, Loss: %.4f)\n' %
@@ -514,10 +520,14 @@ if __name__ == '__main__':
         # 美化控制台输出
         print('='*100)
         # 如果使用动态权重，打印当前权重值
-        if opt.use_dynamic_weights and hasattr(model, 'get_dynamic_weights'):
-            model.set_epoch(epoch)  # 确保模型知道当前epoch
-            cd_weight, distill_weight, diff_att_weight = model.get_dynamic_weights()
-            print(f'【动态权重】CD损失: {cd_weight:.4f}, 蒸馏损失: {distill_weight:.4f}, 差异图注意力损失: {diff_att_weight:.4f}')
+        if opt.use_dynamic_weights:
+            model.set_epoch(epoch)
+            try:
+                task_w, cd_w, distill_w, att_w = model.get_group_weights()
+                print('【动态权重-任务级】LCD: %.4f, Distill: %.4f, Att: %.4f' % (task_w[0].item(), task_w[1].item(), task_w[2].item()))
+                print('【动态权重-LA内部】DiffMap: %.4f, Channel: %.4f, Spatial: %.4f' % (att_w[0].item(), att_w[1].item(), att_w[2].item()))
+            except Exception as e:
+                print(f'【动态权重】打印失败: {e}')
 
         # 合并展示训练和验证结果 - 显示详细的IoU指标避免混淆
         print('【Epoch: %d】学生网络 - 训练平均IoU: %.4f (变化IoU: %.4f, Loss: %.4f) | 验证平均IoU: %.4f (变化IoU: %.4f/%.4f, Loss: %.4f)' %
